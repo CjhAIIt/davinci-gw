@@ -19,6 +19,7 @@ from davinci_gw.mcp.repair_models import (
     AgentDiagnosis,
     DiagnosisRecord,
     FailureKind,
+    RepairContractError,
     RepairRecord,
     RepairState,
 )
@@ -34,10 +35,6 @@ _FORBIDDEN_SUFFIXES = {".xlsx", ".xls", ".arxml", ".dbc", ".ldf", ".blf", ".env"
 _INPUT_PREFIXES = (
     "WORKBOOK_", "INPUT_", "PATH_", "CAN_ID_", "OPERATION_", "TIMEOUT_", "SIGNAL_BIT_",
 )
-
-
-class RepairContractError(ValueError):
-    """可直接返回给 MCP 用户的修复流程契约错误。"""
 
 
 async def _run(

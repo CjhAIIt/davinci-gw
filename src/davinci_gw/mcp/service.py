@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections import OrderedDict
 from threading import RLock
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from davinci_gw.application import GatewayFacade
@@ -12,10 +13,13 @@ from davinci_gw.contracts import OperationStatus, ProgressEventDto, UpdateReques
 from davinci_gw.mcp.mapping import dto_envelope, envelope, issue
 from davinci_gw.mcp.paths import PathPolicyError, validate_input_file, validate_new_output
 from davinci_gw.mcp.runtime import BoundedFacadeRuntime
-from davinci_gw.mcp.repair_service import RepairContractError, RepairCoordinator
+from davinci_gw.mcp.repair_models import RepairContractError
 from davinci_gw.mcp.version import MCP_VERSION, load_build_info
 
 LOGGER = logging.getLogger("davinci_gw.mcp.service")
+
+if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查
+    from davinci_gw.mcp.repair_service import RepairCoordinator
 
 
 class _ProgressLogObserver:
@@ -36,7 +40,7 @@ class GatewayMcpService:
         *,
         facade: GatewayFacade | None = None,
         runtime: BoundedFacadeRuntime | None = None,
-        repairs: RepairCoordinator | None = None,
+        repairs: "RepairCoordinator | None" = None,
     ) -> None:
         self.facade = facade or GatewayFacade()
         self.runtime = runtime or BoundedFacadeRuntime()
@@ -45,7 +49,23 @@ class GatewayMcpService:
         self._prepared_baselines: OrderedDict[str, str] = OrderedDict()
         self._lock = RLock()
         self._observer = _ProgressLogObserver()
-        self.repairs = repairs or RepairCoordinator(facade=self.facade)
+        self._repairs = repairs
+        self._repairs_lock = RLock()
+
+    @property
+    def repairs(self) -> "RepairCoordinator":
+        """按需创建修复协调器。
+
+        协调器依赖 Codex SDK，只在真正使用自动修复时才导入；
+        只使用生成流程的部署（例如桥接服务）因此不必安装 Codex 依赖。
+        """
+        if self._repairs is None:
+            with self._repairs_lock:
+                if self._repairs is None:
+                    from davinci_gw.mcp.repair_service import RepairCoordinator
+
+                    self._repairs = RepairCoordinator(facade=self.facade)
+        return self._repairs
 
     @staticmethod
     def _path_failure(tool: str, exc: PathPolicyError) -> dict[str, object]:
@@ -333,5 +353,6 @@ class GatewayMcpService:
             self._prepared_baselines.clear()
         for session_id in session_ids:
             self.facade.discard_prepared(session_id)
-        await self.repairs.close()
+        if self._repairs is not None:
+            await self._repairs.close()
         await self.runtime.close()
