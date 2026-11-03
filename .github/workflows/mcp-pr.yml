@@ -34,7 +34,9 @@ jobs:
         shell: pwsh
         run: |
           $python = (conda run -n davinci-gw-ci python -c "import sys; print(sys.executable)" | Select-Object -Last 1).Trim()
-          ./scripts/build_mcp_release.ps1 -Python $python -Version 1.0.0
+          $version = (conda run -n davinci-gw-ci python -c "from davinci_gw.mcp.version import MCP_VERSION; print(MCP_VERSION)" | Select-Object -Last 1).Trim()
+          ./scripts/build_mcp_release.ps1 -Python $python -Version $version
+          "MCP_VERSION=$version" >> $env:GITHUB_ENV
 
       - name: MCP STDIO 与无系统 Python 冒烟
         shell: pwsh
@@ -46,6 +48,6 @@ jobs:
       - name: 上传候选包
         uses: actions/upload-artifact@v4
         with:
-          name: davinci-gw-mcp-1.0.0-win-x64
-          path: release/davinci-gw-mcp-1.0.0-win-x64.zip
+          name: davinci-gw-mcp-${{ env.MCP_VERSION }}-win-x64
+          path: release/davinci-gw-mcp-${{ env.MCP_VERSION }}-win-x64.zip
           if-no-files-found: error
