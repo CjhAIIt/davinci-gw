@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+
+from .styles import THEME_LABELS
 
 
 class StepBadge(QLabel):
@@ -91,3 +93,41 @@ class StatusBanner(QFrame):
         self.title.setText(title)
         self.detail.setText(detail)
         self.detail.setVisible(bool(detail))
+
+
+class ThemeSwitch(QWidget):
+    """白天 / 夜间主题切换控件。"""
+
+    theme_changed = Signal(str)
+
+    def __init__(self, theme: str = "light", parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("themeSwitch")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(3, 3, 3, 3)
+        layout.setSpacing(0)
+        self._theme = "light"
+        self._buttons: dict[str, QPushButton] = {}
+        for name, label in THEME_LABELS.items():
+            button = QPushButton(label)
+            button.setObjectName("themeSegment")
+            button.setCheckable(True)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setFixedHeight(26)
+            button.clicked.connect(lambda _checked=False, value=name: self._select(value))
+            layout.addWidget(button)
+            self._buttons[name] = button
+        self.set_theme(theme)
+
+    def _select(self, theme: str) -> None:
+        self.set_theme(theme)
+        self.theme_changed.emit(theme)
+
+    def set_theme(self, theme: str) -> None:
+        """高亮当前主题，不触发信号。"""
+        self._theme = theme if theme in THEME_LABELS else "light"
+        for name, button in self._buttons.items():
+            button.setChecked(name == self._theme)
+
+    def theme(self) -> str:
+        return self._theme

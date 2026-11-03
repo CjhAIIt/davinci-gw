@@ -53,5 +53,8 @@ class FeatureDetailDialog(QDialog):
         layout.addWidget(table)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        close_button = buttons.button(QDialogButtonBox.Close)
+        if close_button is not None:
+            close_button.setText("关闭")
         buttons.rejected.connect(self.close)
         layout.addWidget(buttons)

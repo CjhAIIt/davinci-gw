@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, QUrl, Signal
+from PySide6.QtCore import QCoreApplication, QSettings, Qt, QUrl, Signal
 from PySide6.QtGui import QCloseEvent, QDesktopServices, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -31,11 +31,12 @@ from PySide6.QtWidgets import (
 from davinci_gw.contracts import FeatureSummaryDto
 
 from . import __version__
-from .components import SectionCard, StatusBanner
+from .components import SectionCard, StatusBanner, ThemeSwitch
 from .detail_dialog import FeatureDetailDialog
 from .issue_model import IssueFilterProxyModel, IssueTableModel
 from .logging_config import log_path
 from .state import GuiState
+from .styles import apply_theme, detect_system_theme
 from .view_model import GatewayViewModel
 
 
@@ -65,10 +66,18 @@ class MainWindow(QMainWindow):
     def __init__(self, view_model: GatewayViewModel) -> None:
         super().__init__()
         self.vm = view_model
+        if not QCoreApplication.organizationName():
+            # 窗口位置、主题等设置需要稳定的组织名与应用名，入口未设置时在此兜底。
+            QCoreApplication.setOrganizationName("DaVinciGW")
+            QCoreApplication.setApplicationName("DaVinciGW")
         self.settings = QSettings()
         self._allow_close = False
         self._closing = False
         self._detail_dialog: FeatureDetailDialog | None = None
+        self._theme = str(self.settings.value("ui/theme", "") or "") or detect_system_theme()
+        app = QApplication.instance()
+        if app is not None:
+            apply_theme(app, self._theme)
         self.setWindowTitle("DaVinci 网关路由工具")
         self.setMinimumSize(1000, 700)
         self.resize(1240, 880)
@@ -299,6 +308,8 @@ class MainWindow(QMainWindow):
         text_box.addWidget(subtitle)
         layout.addLayout(text_box)
         layout.addStretch(1)
+        self.theme_switch = ThemeSwitch(self._theme)
+        layout.addWidget(self.theme_switch)
         version_chip = QLabel(f"v{__version__}")
         version_chip.setObjectName("versionChip")
         local_chip = QLabel("本地运行")
@@ -346,6 +357,7 @@ class MainWindow(QMainWindow):
         self.search_edit.textChanged.connect(self.issue_proxy.set_search)
         self.copy_issues_button.clicked.connect(self._copy_issues)
         self.advanced_toggle.toggled.connect(self._toggle_advanced)
+        self.theme_switch.theme_changed.connect(self._apply_theme)
         self.open_folder_button.clicked.connect(self._open_artifact_folder)
         self.copy_path_button.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.vm.artifact_path))
         self.open_log_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_path().parent))))
@@ -520,6 +532,14 @@ class MainWindow(QMainWindow):
     def _toggle_advanced(self, checked: bool) -> None:
         self.advanced_toggle.setText("收起高级信息" if checked else "展开高级信息")
         self.advanced_panel.setVisible(checked)
+
+    def _apply_theme(self, theme: str) -> None:
+        """切换白天 / 夜间主题，并记住用户的选择。"""
+        self._theme = theme
+        app = QApplication.instance()
+        if app is not None:
+            apply_theme(app, theme)
+        self.settings.setValue("ui/theme", theme)
 
     def _open_artifact_folder(self) -> None:
         if self.vm.artifact_path:
