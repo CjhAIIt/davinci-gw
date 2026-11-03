@@ -10,87 +10,99 @@ import sys
 from PySide6.QtGui import QColor, QPalette
 
 LIGHT = {
-    "canvas": "#eef2f7",
+    "canvas": "#f1f5f9",
     "surface": "#ffffff",
-    "surface_alt": "#fbfcfe",
-    "border": "#e4e9f0",
-    "border_strong": "#d6dde8",
+    "surface_alt": "#f8fafc",
+    "border": "#e2e8f0",
+    "border_strong": "#cbd5e1",
     "text": "#0f172a",
     "text_muted": "#64748b",
     "text_faint": "#94a3b8",
-    "accent": "#2f5fe0",
-    "accent_hover": "#274fbd",
-    "accent_pressed": "#1f47a3",
-    "accent_soft": "#eef2ff",
-    "accent_muted": "#b9c6e8",
-    "success": "#0f9d76",
-    "success_soft": "#e9f8f1",
-    "warning": "#c2820a",
-    "warning_soft": "#fdf6e6",
-    "danger": "#d64545",
-    "danger_soft": "#fdefef",
-    "neutral_soft": "#f1f4f8",
-    "chip_bg": "#e6ebf3",
-    "chip_fg": "#64748b",
+    "accent": "#2563eb",
+    "accent_hover": "#1d4ed8",
+    "accent_pressed": "#1e40af",
+    "accent_soft": "#eff6ff",
+    "accent_muted": "#93b4f5",
+    "success": "#059669",
+    "success_soft": "#ecfdf5",
+    "warning": "#d97706",
+    "warning_soft": "#fffbeb",
+    "danger": "#e11d48",
+    "danger_soft": "#fff1f2",
+    "neutral_soft": "#f1f5f9",
+    "chip_bg": "#f1f5f9",
+    "chip_fg": "#475569",
+    "success_chip_bg": "#ecfdf5",
+    "success_chip_fg": "#047857",
+    "warning_chip_bg": "#fffbeb",
+    "warning_chip_fg": "#b45309",
     "input_bg": "#ffffff",
     "button_bg": "#ffffff",
     "button_fg": "#334155",
-    "button_hover": "#f5f8fd",
-    "button_pressed": "#eef2f8",
-    "disabled_bg": "#f1f4f8",
-    "disabled_fg": "#c3cbd8",
-    "ghost_hover": "#eef2f7",
-    "table_header": "#f7f9fc",
-    "table_alt": "#fafbfd",
-    "table_line": "#f1f4f8",
-    "table_selected": "#eef2ff",
+    "button_hover": "#f8fafc",
+    "button_pressed": "#f1f5f9",
+    "disabled_bg": "#f1f5f9",
+    "disabled_fg": "#cbd5e1",
+    "ghost_hover": "#f1f5f9",
+    "table_header": "#f8fafc",
+    "table_alt": "#fcfdfe",
+    "table_line": "#f1f5f9",
+    "table_selected": "#eff6ff",
     "scroll": "#cbd5e1",
-    "scroll_hover": "#aab6c6",
+    "scroll_hover": "#94a3b8",
     "tooltip_bg": "#0f172a",
     "tooltip_fg": "#ffffff",
     "on_accent": "#ffffff",
+    "slot_icon_bg": "#ecfdf5",
+    "slot_icon_fg": "#059669",
 }
 
 DARK = {
-    "canvas": "#0e1626",
-    "surface": "#18212f",
-    "surface_alt": "#151d29",
-    "border": "#2a3850",
-    "border_strong": "#3a4a63",
-    "text": "#e6edf7",
-    "text_muted": "#9fb0c7",
-    "text_faint": "#7b8ca3",
-    "accent": "#4d84f0",
-    "accent_hover": "#6b99f5",
-    "accent_pressed": "#3a6ed4",
-    "accent_soft": "#1b2b48",
-    "accent_muted": "#31456f",
-    "success": "#35c08e",
-    "success_soft": "#13312a",
-    "warning": "#e0a33a",
-    "warning_soft": "#332811",
-    "danger": "#f07a7a",
-    "danger_soft": "#3a1f22",
-    "neutral_soft": "#1c2637",
-    "chip_bg": "#233149",
-    "chip_fg": "#b3c4da",
-    "input_bg": "#131b27",
-    "button_bg": "#1f2a3d",
-    "button_fg": "#d6e0ee",
-    "button_hover": "#26334a",
-    "button_pressed": "#1a2434",
-    "disabled_bg": "#18212f",
-    "disabled_fg": "#5b6b83",
-    "ghost_hover": "#233149",
+    "canvas": "#0b1120",
+    "surface": "#0f172a",
+    "surface_alt": "#1e293b",
+    "border": "#1e293b",
+    "border_strong": "#334155",
+    "text": "#f1f5f9",
+    "text_muted": "#94a3b8",
+    "text_faint": "#64748b",
+    "accent": "#60a5fa",
+    "accent_hover": "#93b4f5",
+    "accent_pressed": "#3b82f6",
+    "accent_soft": "#172554",
+    "accent_muted": "#1e3a8a",
+    "success": "#34d399",
+    "success_soft": "#022c22",
+    "warning": "#fbbf24",
+    "warning_soft": "#422006",
+    "danger": "#fb7185",
+    "danger_soft": "#4c0519",
+    "neutral_soft": "#1e293b",
+    "chip_bg": "#1e293b",
+    "chip_fg": "#cbd5e1",
+    "success_chip_bg": "#022c22",
+    "success_chip_fg": "#6ee7b7",
+    "warning_chip_bg": "#422006",
+    "warning_chip_fg": "#fcd34d",
+    "input_bg": "#0f172a",
+    "button_bg": "#1e293b",
+    "button_fg": "#e2e8f0",
+    "button_hover": "#334155",
+    "button_pressed": "#1e293b",
+    "disabled_bg": "#0f172a",
+    "disabled_fg": "#64748b",
+    "ghost_hover": "#1e293b",
     "table_header": "#1e293b",
-    "table_alt": "#1a2331",
-    "table_line": "#26324a",
-    "table_selected": "#24406e",
-    "scroll": "#3a4a63",
-    "scroll_hover": "#4e617d",
+    "table_alt": "#131c2e",
+    "table_line": "#1e293b",
+    "table_selected": "#1e3a8a",
+    "scroll": "#334155",
+    "scroll_hover": "#475569",
     "tooltip_bg": "#e2e8f0",
     "tooltip_fg": "#0f172a",
-    "on_accent": "#ffffff",
+    "on_accent": "#0b1120",
+    "slot_icon_bg": "#022c22",
+    "slot_icon_fg": "#34d399",
 }
 
 THEMES = {"light": LIGHT, "dark": DARK}
@@ -127,19 +139,32 @@ QLabel#pageSubtitle {{
     font-size: 13px;
     color: {c['text_muted']};
 }}
-QLabel#versionChip, QLabel#softChip {{
-    border-radius: 11px;
-    padding: 3px 12px;
-    font-size: 12px;
+QLabel#versionChip, QLabel#softChip, QLabel#readyChip {{
+    border-radius: 10px;
+    padding: 2px 10px;
+    font-size: 11px;
     font-weight: 600;
 }}
 QLabel#versionChip {{
     background: {c['accent_soft']};
     color: {c['accent']};
+    border: 1px solid {c['accent_muted']};
 }}
 QLabel#softChip {{
     background: {c['chip_bg']};
     color: {c['chip_fg']};
+}}
+QLabel#readyChip {{
+    background: {c['success_chip_bg']};
+    color: {c['success_chip_fg']};
+    border: 1px solid {c['success']};
+    font-size: 10px;
+    padding: 1px 8px;
+}}
+QLabel#demoChip {{
+    background: {c['warning_chip_bg']};
+    color: {c['warning_chip_fg']};
+    border: 1px solid {c['warning']};
 }}
 
 /* ---------- 主题切换 ---------- */
@@ -164,11 +189,180 @@ QPushButton#themeSegment:checked {{
     color: {c['on_accent']};
 }}
 
+/* ---------- 双栏布局 ---------- */
+QWidget#pageContent {{
+    background: {c['canvas']};
+}}
+QWidget#maxWidthHolder {{
+    background: transparent;
+}}
+QWidget#bentoLeft, QWidget#bentoRight {{
+    background: transparent;
+}}
+QFrame#bentoColumn {{
+    background: transparent;
+}}
+
+/* ---------- 头部胶囊按钮 ---------- */
+QPushButton#chipButton {{
+    background: {c['chip_bg']};
+    border: 1px solid {c['border']};
+    border-radius: 10px;
+    padding: 5px 12px;
+    color: {c['button_fg']};
+    font-size: 11px;
+    font-weight: 600;
+}}
+QPushButton#chipButton:hover {{
+    background: {c['button_hover']};
+    border-color: {c['border_strong']};
+}}
+QPushButton#demoChip {{
+    background: {c['warning_chip_bg']};
+    border: 1px solid {c['warning']};
+    border-radius: 10px;
+    padding: 5px 12px;
+    color: {c['warning_chip_fg']};
+    font-size: 11px;
+    font-weight: 600;
+}}
+QPushButton#demoChip:hover {{
+    background: {c['warning_soft']};
+}}
+
+/* ---------- 文件槽 ---------- */
+QFrame#fileSlot {{
+    background: {c['surface_alt']};
+    border: 1px solid {c['border']};
+    border-radius: 12px;
+}}
+QFrame#fileSlot:hover {{
+    border: 1px solid {c['accent']};
+}}
+QFrame#fileSlot[dragover="true"] {{
+    border: 2px solid {c['accent']};
+    background: {c['accent_soft']};
+}}
+QFrame#fileSlotIcon {{
+    background: {c['slot_icon_bg']};
+    color: {c['slot_icon_fg']};
+    border: 1px solid {c['slot_icon_fg']};
+    border-radius: 9px;
+    font-size: 14px;
+    font-weight: 700;
+}}
+QLabel#fileSlotTitle {{
+    font-size: 12px;
+    font-weight: 600;
+    color: {c['text']};
+}}
+QLabel#fileSlotSuffix {{
+    background: {c['chip_bg']};
+    color: {c['chip_fg']};
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-family: "Cascadia Mono", "Consolas", monospace;
+}}
+QLineEdit#fileSlotPath {{
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: {c['text_faint']};
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-size: 11px;
+}}
+QLineEdit#fileSlotPath:focus {{
+    background: transparent;
+    border: none;
+}}
+QLineEdit#fileSlotPath::placeholder {{
+    color: {c['text_faint']};
+    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    font-size: 12px;
+}}
+
+/* ---------- 原版模式提示 ---------- */
+QFrame#legacyNotice {{
+    background: {c['danger_soft']};
+    border: 1px solid {c['danger']};
+    border-radius: 12px;
+}}
+QLabel#legacyNoticeText {{
+    color: {c['danger']};
+    font-size: 12px;
+}}
+
+/* ---------- 问题列表容器 ---------- */
+QFrame#issueListFrame {{
+    background: {c['surface_alt']};
+    border: 1px dashed {c['border_strong']};
+    border-radius: 12px;
+}}
+QFrame#issueListFrame QTableView {{
+    border: none;
+    border-radius: 12px;
+}}
+
+/* ---------- 胶囊分段 ---------- */
+QFrame#filterPills {{
+    background: {c['chip_bg']};
+    border-radius: 14px;
+}}
+QFrame#filterPill {{
+    background: transparent;
+    border: none;
+    border-radius: 12px;
+}}
+QFrame#filterPill:hover {{
+    background: {c['ghost_hover']};
+}}
+QFrame#filterPill[checked="true"] {{
+    background: {c['surface']};
+}}
+QLabel#pillName {{
+    color: {c['text_muted']};
+    font-weight: 600;
+}}
+QFrame#filterPill[checked="true"] QLabel#pillName {{
+    color: {c['text']};
+}}
+QLabel#filterCount {{
+    color: {c['text_faint']};
+    font-weight: 600;
+}}
+
+/* ---------- 紧凑底栏 ---------- */
+QFrame#telemetryBar {{
+    background: transparent;
+    border-top: 1px solid {c['border']};
+}}
+QLabel#telemetryText {{
+    color: {c['text_faint']};
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-size: 11px;
+}}
+QLabel#telemetryLabel {{
+    color: {c['text_faint']};
+    font-size: 11px;
+}}
+
+/* ---------- 流水线步骤 ---------- */
+QLabel#stepCounter {{
+    background: {c['chip_bg']};
+    color: {c['chip_fg']};
+    border-radius: 9px;
+    padding: 2px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}}
+
 /* ---------- 卡片 ---------- */
 QFrame#sectionCard {{
     background: {c['surface']};
     border: 1px solid {c['border']};
-    border-radius: 12px;
+    border-radius: 16px;
 }}
 QLabel#sectionTitle {{
     font-size: 15px;
@@ -449,6 +643,19 @@ QLabel#emptyHint {{
     color: {c['text_faint']};
     font-size: 13px;
 }}
+QTableView::indicator {{
+    width: 15px;
+    height: 15px;
+    border-radius: 4px;
+}}
+QTableView::indicator:unchecked {{
+    border: 1px solid {c['border_strong']};
+    background: {c['surface']};
+}}
+QTableView::indicator:checked {{
+    border: 1px solid {c['accent']};
+    background: {c['accent']};
+}}
 
 /* ---------- 高级信息 ---------- */
 QFrame#advancedPanel {{
@@ -460,8 +667,8 @@ QFrame#advancedPanel {{
 /* ---------- 滚动条 ---------- */
 QScrollBar:vertical {{
     background: transparent;
-    width: 10px;
-    margin: 2px;
+    width: 8px;
+    margin: 1px;
 }}
 QScrollBar::handle:vertical {{
     background: {c['scroll']};
@@ -480,8 +687,8 @@ QScrollBar::add-page, QScrollBar::sub-page {{
 }}
 QScrollBar:horizontal {{
     background: transparent;
-    height: 10px;
-    margin: 2px;
+    height: 8px;
+    margin: 1px;
 }}
 QScrollBar::handle:horizontal {{
     background: {c['scroll']};

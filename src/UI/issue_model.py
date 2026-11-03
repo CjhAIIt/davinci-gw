@@ -18,15 +18,19 @@ SEVERITY_COLORS = {
 class IssueTableModel(QAbstractTableModel):
     """以稳定列顺序展示公共 IssueDto。"""
 
-    HEADERS = ("级别", "代码", "报文 ID", "报文名称", "说明", "位置", "处理建议")
+    HEADERS = ("级别", "代码", "报文 ID", "报文名称", "说明", "位置", "处理建议", "确认")
+    ACK_COLUMN = 7
+    ACK_SEVERITIES = ("WARNING", "DECISION")
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._issues: tuple[IssueDto, ...] = ()
+        self._acknowledged: set[int] = set()
 
     def set_issues(self, issues: tuple[IssueDto, ...]) -> None:
         self.beginResetModel()
         self._issues = issues
+        self._acknowledged.clear()
         self.endResetModel()
 
     def rowCount(self, parent=QModelIndex()) -> int:  # noqa: N802
@@ -39,6 +43,39 @@ class IssueTableModel(QAbstractTableModel):
         if role == Qt.DisplayRole and orientation == Qt.Horizontal:
             return self.HEADERS[section]
         return super().headerData(section, orientation, role)
+
+    def acknowledgeable(self, row: int) -> bool:
+        """该行是否需要人工确认（警告与保留决定）。"""
+        if not 0 <= row < len(self._issues):
+            return False
+        return self._issues[row].severity.upper() in self.ACK_SEVERITIES
+
+    def issue_at(self, row: int) -> IssueDto | None:
+        """按行取问题对象。"""
+        if not 0 <= row < len(self._issues):
+            return None
+        return self._issues[row]
+
+    def acknowledged(self, row: int) -> bool:
+        return row in self._acknowledged
+
+    def acknowledge_all(self, rows) -> None:
+        """批量确认给定行；返回实际确认的数量。"""
+        changed = 0
+        for row in rows:
+            if self.acknowledgeable(row) and row not in self._acknowledged:
+                self._acknowledged.add(row)
+                changed += 1
+        if changed:
+            top = self.index(0, self.ACK_COLUMN)
+            bottom = self.index(len(self._issues) - 1, self.ACK_COLUMN)
+            self.dataChanged.emit(top, bottom)
+        return changed
+
+    def pending_count(self, rows=None) -> int:
+        """统计仍需人工确认的行数。"""
+        candidates = range(len(self._issues)) if rows is None else rows
+        return sum(1 for row in candidates if self.acknowledgeable(row) and row not in self._acknowledged)
 
     @staticmethod
     def _location(issue: IssueDto) -> str:
@@ -92,10 +129,23 @@ class IssueTableModel(QAbstractTableModel):
             self._advice(issue),
         )
 
+    def flags(self, index):
+        if index.isValid() and index.column() == self.ACK_COLUMN and self.acknowledgeable(index.row()):
+            return Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable
+        return super().flags(index)
+
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid() or index.row() >= len(self._issues):
             return None
         issue = self._issues[index.row()]
+        if index.column() == self.ACK_COLUMN:
+            if role == Qt.CheckStateRole:
+                return Qt.Checked if self.acknowledged(index.row()) else Qt.Unchecked
+            if role == Qt.DisplayRole:
+                return ""
+            if role == Qt.ToolTipRole:
+                return "人工确认该警告或保留决定"
+            return None
         values = self._values(issue)
         if role in {Qt.DisplayRole, Qt.ToolTipRole}:
             return values[index.column()]
@@ -105,6 +155,20 @@ class IssueTableModel(QAbstractTableModel):
             color = SEVERITY_COLORS.get(issue.severity.upper())
             return QBrush(QColor(color)) if color else None
         return None
+
+    def setData(self, index, value, role=Qt.DisplayRole):  # noqa: N802
+        if not index.isValid() or index.column() != self.ACK_COLUMN:
+            return False
+        if role == Qt.CheckStateRole:
+            if not self.acknowledgeable(index.row()):
+                return False
+            if Qt.CheckState(value) == Qt.Checked:
+                self._acknowledged.add(index.row())
+            else:
+                self._acknowledged.discard(index.row())
+            self.dataChanged.emit(index, index)
+            return True
+        return False
 
     def copy_text(self, source_rows: set[int]) -> str:
         """把所选源行转换为适合粘贴到工单的文本。"""

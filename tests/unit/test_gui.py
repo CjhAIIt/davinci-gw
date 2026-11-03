@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal, Qt
 from PySide6.QtWidgets import QLabel, QPushButton
 
+from UI.components import PillButton
 from UI.issue_model import IssueTableModel
 from UI.main_window import MainWindow
 from UI.output_paths import suggest_output_path, validate_output_path
@@ -209,6 +210,87 @@ def test_theme_switch_changes_stylesheet_and_remembers_choice(qtbot, tmp_path: P
         assert window.settings.value("ui/theme") == "light"
     finally:
         QSettings.setDefaultFormat(original_format)
+
+
+def test_layout_switch_moves_cards_between_bento_and_legacy(qtbot) -> None:
+    """双栏与原版单栏切换时，卡片在两套布局之间搬家且不丢失。"""
+    runner = _FakeRunner()
+    view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    assert window._layout_mode == "bento"
+    assert window.legacy_notice.isHidden() is True
+
+    window._toggle_layout()
+    assert window._layout_mode == "legacy"
+    assert window.legacy_notice.isHidden() is False
+    assert window._input_card.parentWidget() is window._legacy_host
+    assert window._issues_card.parentWidget() is window._legacy_host
+
+    window._toggle_layout()
+    assert window._layout_mode == "bento"
+    assert window.legacy_notice.isHidden() is True
+    assert window._input_card.parentWidget() is window._left_host
+    assert window._issues_card.parentWidget() is window._right_host
+
+
+def test_warning_and_decision_rows_can_be_acknowledged(qtbot) -> None:
+    """警告与保留决定可人工确认，确认状态回到状态条与筛选计数。"""
+    runner = _FakeRunner()
+    view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    warning = issues_to_dto((ValidationIssue(
+        "PDUR_ROUTING_GROUP_NON_MAIN_MEMBER", "基线一致性警告", severity=ValidationSeverity.WARNING,
+    ),))
+    decision = decisions_to_dto((RetentionDecision(
+        "/Cfg/Shared", "仍被其他路由使用", "DIRECT_SHARED", (SourceLocation("直接报文路由", 2),),
+    ),))
+    view_model.issues = warning + decision
+    view_model.issues_changed.emit(view_model.issues)
+    view_model.changed.emit()
+
+    model = window.issue_model
+    assert model.rowCount() == 2
+    assert model.acknowledgeable(0) and model.acknowledgeable(1)
+    assert model.pending_count() == 2
+
+    # 勾选第一行：只影响该行。
+    model.setData(model.index(0, model.ACK_COLUMN), Qt.Checked, Qt.CheckStateRole)
+    assert model.acknowledged(0) and not model.acknowledged(1)
+    assert model.pending_count() == 1
+
+    # 批量确认：把剩余可见行一次确认完。
+    window._acknowledge_visible()
+    assert model.pending_count() == 0
+    assert "待确认" not in window.status_banner.title.text()
+
+
+def test_severity_filter_pills_show_counts(qtbot) -> None:
+    """胶囊分段显示各分类计数，并与问题模型保持一致。"""
+    runner = _FakeRunner()
+    view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    issues = issues_to_dto((
+        ValidationIssue("ROUTE_A", "错误", severity=ValidationSeverity.ERROR),
+        ValidationIssue("ROUTE_B", "警告", severity=ValidationSeverity.WARNING),
+        ValidationIssue("ROUTE_C", "警告二", severity=ValidationSeverity.WARNING),
+    ))
+    view_model.issues = issues
+    view_model.issues_changed.emit(view_model.issues)
+
+    labels = {pill.name.text(): pill.count.text() for pill in window.filter_pills.findChildren(PillButton)}
+    assert labels["全部"] == "3"
+    assert labels["错误"] == "1"
+    assert labels["警告"] == "2"
+    assert labels["提示"] == "0"
+
+    window.filter_pills._select("WARNING")
+    assert window.issue_proxy._severity == "WARNING"
 
 
 def test_single_worker_thread_previews_and_commits_prepared_session(
