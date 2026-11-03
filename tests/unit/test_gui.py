@@ -147,7 +147,8 @@ def test_feature_cards_are_created_from_dto_without_fixed_ids(qtbot) -> None:
     view_model.preview_changed.emit()
 
     labels = {label.text() for label in window.feature_group.findChildren(QLabel)}
-    assert "虚拟诊断路由 · READY" in labels
+    assert "虚拟诊断路由" in labels
+    assert "READY" in labels
     assert "数量：3" in labels
     detail_button = next(
         button for button in window.feature_group.findChildren(QPushButton)
@@ -157,6 +158,26 @@ def test_feature_cards_are_created_from_dto_without_fixed_ids(qtbot) -> None:
     assert window._detail_dialog is not None
     assert window._detail_dialog.model.rowCount() == 1
     assert window._detail_dialog.model.item(0, 0).text() == "新增"
+
+
+def test_severity_colour_and_status_banner_state(qtbot) -> None:
+    """级别用颜色区分，状态条按流程状态切换配色与文案。"""
+    runner = _FakeRunner()
+    view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    model = IssueTableModel()
+    model.set_issues(issues_to_dto((ValidationIssue(
+        "ROUTE_TEST", "路由问题", severity=ValidationSeverity.ERROR,
+    ),)))
+    assert model.index(0, 0).data(Qt.ForegroundRole) is not None
+
+    view_model.state = GuiState.SUCCESS
+    view_model.stage_name = "生成完成"
+    view_model.changed.emit()
+    assert window.status_banner.rail.property("state") == "success"
+    assert window.status_banner.title.text() == "生成完成"
 
 
 def test_single_worker_thread_previews_and_commits_prepared_session(

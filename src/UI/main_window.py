@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -23,7 +22,6 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QScrollArea,
     QSizePolicy,
-    QStyle,
     QTableView,
     QToolButton,
     QVBoxLayout,
@@ -32,8 +30,10 @@ from PySide6.QtWidgets import (
 
 from davinci_gw.contracts import FeatureSummaryDto
 
-from .issue_model import IssueFilterProxyModel, IssueTableModel
+from . import __version__
+from .components import SectionCard, StatusBanner
 from .detail_dialog import FeatureDetailDialog
+from .issue_model import IssueFilterProxyModel, IssueTableModel
 from .logging_config import log_path
 from .state import GuiState
 from .view_model import GatewayViewModel
@@ -70,8 +70,8 @@ class MainWindow(QMainWindow):
         self._closing = False
         self._detail_dialog: FeatureDetailDialog | None = None
         self.setWindowTitle("DaVinci 网关路由工具")
-        self.setMinimumSize(980, 680)
-        self.resize(1180, 820)
+        self.setMinimumSize(1000, 700)
+        self.resize(1240, 880)
         self.setAcceptDrops(True)
         self._build_ui()
         self._connect()
@@ -81,100 +81,129 @@ class MainWindow(QMainWindow):
         self._rebuild_summary()
         self._sync()
 
+    # ------------------------------------------------------------------ 布局
+
     def _build_ui(self) -> None:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setObjectName("pageScroll")
+        scroll.setFrameShape(QFrame.NoFrame)
         content = QWidget()
+        content.setObjectName("pageContent")
         root = QVBoxLayout(content)
-        root.setContentsMargins(18, 16, 18, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(26, 22, 26, 24)
+        root.setSpacing(16)
 
-        title = QLabel("DaVinci 网关路由配置生成")
-        title.setStyleSheet("font-size: 20px; font-weight: 700;")
-        subtitle = QLabel("选择标准配置表和基准 ARXML，先预览，再生成新文件。")
-        root.addWidget(title)
-        root.addWidget(subtitle)
+        root.addWidget(self._build_header())
 
-        inputs = QGroupBox("1–2  选择输入文件")
-        grid = QGridLayout(inputs)
+        inputs = SectionCard("选择输入文件", step="1", hint="可直接拖入文件")
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(12)
         self.config_edit = FileDropEdit(".xlsx")
         self.config_edit.setPlaceholderText("选择或拖入标准配置表（.xlsx）")
         self.config_edit.setAccessibleName("标准配置表路径")
         self.config_button = QPushButton("浏览…")
-        self.config_button.setIcon(self.style().standardIcon(QStyle.SP_DialogOpenButton))
         self.config_clear = QPushButton("清除")
+        self.config_clear.setObjectName("ghostButton")
         self.baseline_edit = FileDropEdit(".arxml")
         self.baseline_edit.setPlaceholderText("选择或拖入基准 ARXML（.arxml）")
         self.baseline_edit.setAccessibleName("基准 ARXML 路径")
         self.baseline_button = QPushButton("浏览…")
-        self.baseline_button.setIcon(self.style().standardIcon(QStyle.SP_DialogOpenButton))
         self.baseline_clear = QPushButton("清除")
-        grid.addWidget(QLabel("标准配置表"), 0, 0)
-        grid.addWidget(self.config_edit, 0, 1)
-        grid.addWidget(self.config_button, 0, 2)
-        grid.addWidget(self.config_clear, 0, 3)
-        grid.addWidget(QLabel("基准 ARXML"), 1, 0)
-        grid.addWidget(self.baseline_edit, 1, 1)
-        grid.addWidget(self.baseline_button, 1, 2)
-        grid.addWidget(self.baseline_clear, 1, 3)
+        self.baseline_clear.setObjectName("ghostButton")
+        self._add_file_row(grid, 0, "标准配置表", self.config_edit, self.config_button, self.config_clear)
+        self._add_file_row(grid, 1, "基准 ARXML", self.baseline_edit, self.baseline_button, self.baseline_clear)
         grid.setColumnStretch(1, 1)
+        inputs.body.addLayout(grid)
+        input_hint = QLabel(
+            "标准配置表需符合本项目的输入契约（*_vX.x.xlsx）；"
+            "基准 ARXML 需包含 CanIf、EcuC、PduR，信号路由还需要 Com。"
+        )
+        input_hint.setObjectName("fieldHint")
+        input_hint.setWordWrap(True)
+        inputs.body.addWidget(input_hint)
         root.addWidget(inputs)
 
-        actions = QGroupBox("3–4  预览并生成")
-        action_layout = QGridLayout(actions)
+        actions = SectionCard("预览并生成", step="2", hint="先预览并确认，再生成新文件")
+        action_layout = QGridLayout()
+        action_layout.setHorizontalSpacing(12)
+        action_layout.setVerticalSpacing(10)
         self.output_edit = QLineEdit()
+        self.output_edit.setPlaceholderText("预览通过后自动建议输出路径")
         self.output_edit.setAccessibleName("输出 ARXML 路径")
         self.output_button = QPushButton("选择输出…")
+        output_label = QLabel("输出文件")
+        output_label.setObjectName("fieldLabel")
+        output_label.setMinimumWidth(96)
+        output_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        action_layout.addWidget(output_label, 0, 0)
+        action_layout.addWidget(self.output_edit, 0, 1)
+        action_layout.addWidget(self.output_button, 0, 2)
+        self.output_error = QLabel()
+        self.output_error.setObjectName("outputError")
+        self.output_error.setWordWrap(True)
+        action_layout.addWidget(self.output_error, 1, 1, 1, 2)
         self.preview_button = QPushButton("预览变更")
-        self.preview_button.setObjectName("primaryButton")
         self.generate_button = QPushButton("生成 ARXML")
         self.generate_button.setObjectName("primaryButton")
         self.cancel_button = QPushButton("取消")
-        self.output_error = QLabel()
-        self.output_error.setObjectName("outputError")
-        action_layout.addWidget(QLabel("输出文件"), 0, 0)
-        action_layout.addWidget(self.output_edit, 0, 1, 1, 3)
-        action_layout.addWidget(self.output_button, 0, 4)
-        action_layout.addWidget(self.output_error, 1, 1, 1, 4)
+        self.cancel_button.setObjectName("dangerButton")
         action_buttons = QHBoxLayout()
-        action_buttons.addStretch()
+        action_buttons.setSpacing(10)
+        action_buttons.addStretch(1)
+        action_buttons.addWidget(self.cancel_button)
         action_buttons.addWidget(self.preview_button)
         action_buttons.addWidget(self.generate_button)
-        action_buttons.addWidget(self.cancel_button)
-        action_layout.addLayout(action_buttons, 2, 1, 1, 4)
+        action_layout.addLayout(action_buttons, 2, 1, 1, 2)
         action_layout.setColumnStretch(1, 1)
+        actions.body.addLayout(action_layout)
         root.addWidget(actions)
 
-        self.status_banner = QLabel()
-        self.status_banner.setObjectName("statusBanner")
-        self.status_banner.setWordWrap(True)
+        self.status_banner = StatusBanner()
+        root.addWidget(self.status_banner)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
-        root.addWidget(self.status_banner)
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(8)
         root.addWidget(self.progress)
 
-        self.result_group = QGroupBox("生成结果")
-        result_layout = QHBoxLayout(self.result_group)
+        self.result_group = SectionCard("生成结果")
+        result_layout = QHBoxLayout()
+        result_layout.setSpacing(10)
         self.result_path = QLabel()
+        self.result_path.setObjectName("monoValue")
         self.result_path.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.result_path.setWordWrap(True)
         self.open_folder_button = QPushButton("打开所在文件夹")
         self.copy_path_button = QPushButton("复制路径")
         result_layout.addWidget(self.result_path, 1)
         result_layout.addWidget(self.open_folder_button)
         result_layout.addWidget(self.copy_path_button)
+        self.result_group.body.addLayout(result_layout)
         root.addWidget(self.result_group)
 
-        self.check_group = QGroupBox("输入检查")
-        self.check_layout = QGridLayout(self.check_group)
+        self.check_group = SectionCard("输入检查")
+        self.check_layout = QGridLayout()
+        self.check_layout.setHorizontalSpacing(18)
+        self.check_layout.setVerticalSpacing(8)
+        self.check_layout.setColumnStretch(0, 0)
+        self.check_layout.setColumnStretch(1, 1)
+        self.check_group.body.addLayout(self.check_layout)
         root.addWidget(self.check_group)
 
-        self.feature_group = QGroupBox("变更摘要")
-        self.feature_layout = QGridLayout(self.feature_group)
+        self.feature_group = SectionCard("变更摘要")
+        self.feature_layout = QGridLayout()
+        self.feature_layout.setHorizontalSpacing(12)
+        self.feature_layout.setVerticalSpacing(12)
+        self.feature_group.body.addLayout(self.feature_layout)
         root.addWidget(self.feature_group)
 
-        issues = QGroupBox("问题与保留决定")
-        issue_layout = QVBoxLayout(issues)
+        issues = SectionCard("问题与保留决定", hint="错误会阻止生成；警告与保留决定需要人工确认")
+        issue_layout = QVBoxLayout()
+        issue_layout.setSpacing(10)
         filters = QHBoxLayout()
+        filters.setSpacing(10)
         self.severity_filter = QComboBox()
         for label, value in (("全部", "ALL"), ("错误", "ERROR"), ("警告", "WARNING"),
                              ("提示", "INFO"), ("保留决定", "DECISION")):
@@ -182,10 +211,10 @@ class MainWindow(QMainWindow):
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("搜索代码、说明、位置或建议")
         self.copy_issues_button = QPushButton("复制所选")
-        filters.addWidget(QLabel("级别"))
         filters.addWidget(self.severity_filter)
         filters.addWidget(self.search_edit, 1)
         filters.addWidget(self.copy_issues_button)
+        issue_layout.addLayout(filters)
         self.issue_model = IssueTableModel(self)
         self.issue_proxy = IssueFilterProxyModel(self)
         self.issue_proxy.setSourceModel(self.issue_model)
@@ -193,40 +222,104 @@ class MainWindow(QMainWindow):
         self.issue_table.setModel(self.issue_proxy)
         self.issue_table.setSortingEnabled(True)
         self.issue_table.setSelectionBehavior(QTableView.SelectRows)
-        self.issue_table.setMinimumHeight(190)
-        self.issue_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
-        self.issue_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
-        issue_layout.addLayout(filters)
+        self.issue_table.setShowGrid(False)
+        self.issue_table.setAlternatingRowColors(True)
+        self.issue_table.setMinimumHeight(200)
+        header = self.issue_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        for column, width in ((1, 230), (2, 190), (3, 190), (5, 180)):
+            header.setSectionResizeMode(column, QHeaderView.Interactive)
+            self.issue_table.setColumnWidth(column, width)
+        header.setSectionResizeMode(4, QHeaderView.Stretch)
+        header.setSectionResizeMode(6, QHeaderView.Stretch)
+        self.issue_table.verticalHeader().setVisible(False)
+        self.issue_table.verticalHeader().setDefaultSectionSize(30)
         issue_layout.addWidget(self.issue_table)
+        self.issue_empty = QLabel("暂无问题。预览完成后，错误、警告与保留决定会显示在这里。")
+        self.issue_empty.setObjectName("emptyHint")
+        self.issue_empty.setAlignment(Qt.AlignCenter)
+        issue_layout.addWidget(self.issue_empty)
+        issues.body.addLayout(issue_layout)
         root.addWidget(issues)
 
-        self.advanced_toggle = QToolButton()
-        self.advanced_toggle.setText("高级信息")
+        self.advanced_toggle = QPushButton("展开高级信息")
+        self.advanced_toggle.setObjectName("linkButton")
         self.advanced_toggle.setCheckable(True)
-        self.advanced_toggle.setArrowType(Qt.RightArrow)
+        self.advanced_toggle.setCursor(Qt.PointingHandCursor)
         self.advanced_panel = QFrame()
-        advanced_layout = QGridLayout(self.advanced_panel)
+        self.advanced_panel.setObjectName("advancedPanel")
+        advanced_layout = QGridLayout()
+        advanced_layout.setContentsMargins(14, 12, 14, 12)
+        advanced_layout.setHorizontalSpacing(18)
+        advanced_layout.setVerticalSpacing(8)
         self.operation_label = QLabel("—")
         self.session_label = QLabel("—")
-        self.version_label = QLabel("1.3.0")
+        self.version_label = QLabel(__version__)
+        self.operation_label.setObjectName("monoValue")
+        self.session_label.setObjectName("monoValue")
         self.open_log_button = QPushButton("打开日志目录")
-        advanced_layout.addWidget(QLabel("操作 ID"), 0, 0)
-        advanced_layout.addWidget(self.operation_label, 0, 1)
-        advanced_layout.addWidget(QLabel("会话 ID"), 1, 0)
-        advanced_layout.addWidget(self.session_label, 1, 1)
-        advanced_layout.addWidget(QLabel("版本"), 2, 0)
-        advanced_layout.addWidget(self.version_label, 2, 1)
+        self.open_log_button.setObjectName("linkButton")
+        for row, (caption, value) in enumerate((
+            ("操作 ID", self.operation_label),
+            ("会话 ID", self.session_label),
+            ("版本", self.version_label),
+        )):
+            label = QLabel(caption)
+            label.setObjectName("mutedValue")
+            advanced_layout.addWidget(label, row, 0)
+            advanced_layout.addWidget(value, row, 1)
         advanced_layout.addWidget(self.open_log_button, 3, 1)
+        advanced_layout.setColumnStretch(1, 1)
+        self.advanced_panel.setLayout(advanced_layout)
         self.advanced_panel.setVisible(False)
         root.addWidget(self.advanced_toggle)
         root.addWidget(self.advanced_panel)
-        root.addStretch()
+        root.addStretch(1)
         scroll.setWidget(content)
         self.setCentralWidget(scroll)
 
         QShortcut(QKeySequence("Ctrl+P"), self, activated=self.vm.start_preview)
         QShortcut(QKeySequence("Ctrl+G"), self, activated=self.vm.start_generate)
         QShortcut(QKeySequence("Esc"), self, activated=self.vm.cancel)
+
+    def _build_header(self) -> QWidget:
+        """页头：标题、说明与版本标识。"""
+        header = QWidget()
+        header.setObjectName("pageHeader")
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(16)
+        text_box = QVBoxLayout()
+        text_box.setSpacing(4)
+        title = QLabel("DaVinci 网关路由配置生成")
+        title.setObjectName("pageTitle")
+        subtitle = QLabel("选择标准配置表和基准 ARXML，先预览，再生成新文件。")
+        subtitle.setObjectName("pageSubtitle")
+        text_box.addWidget(title)
+        text_box.addWidget(subtitle)
+        layout.addLayout(text_box)
+        layout.addStretch(1)
+        version_chip = QLabel(f"v{__version__}")
+        version_chip.setObjectName("versionChip")
+        local_chip = QLabel("本地运行")
+        local_chip.setObjectName("softChip")
+        layout.addWidget(version_chip)
+        layout.addWidget(local_chip)
+        return header
+
+    @staticmethod
+    def _add_file_row(grid, row: int, caption: str, edit, browse, clear) -> None:
+        """按统一的标签、输入框和按钮样式排一行文件输入。"""
+        label = QLabel(caption)
+        label.setObjectName("fieldLabel")
+        label.setMinimumWidth(96)
+        label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        grid.addWidget(label, row, 0)
+        grid.addWidget(edit, row, 1)
+        grid.addWidget(browse, row, 2)
+        grid.addWidget(clear, row, 3)
+
+    # ------------------------------------------------------------------ 连接
 
     def _connect(self) -> None:
         self.vm.changed.connect(self._sync)
@@ -290,6 +383,8 @@ class MainWindow(QMainWindow):
             self.settings.setValue("recent/output", str(Path(path).parent))
             self.vm.set_output_path(path, manual=True)
 
+    # ------------------------------------------------------------------ 同步
+
     def _sync(self) -> None:
         controls = self.vm.controls
         if self.config_edit.text() != self.vm.config_path:
@@ -306,37 +401,45 @@ class MainWindow(QMainWindow):
         self.preview_button.setEnabled(controls.preview_enabled)
         self.generate_button.setEnabled(controls.generate_enabled)
         self.cancel_button.setEnabled(controls.cancel_enabled)
-        state_text = {
-            GuiState.EMPTY: "等待输入", GuiState.READY: "输入就绪",
-            GuiState.PREPARING: "正在预览", GuiState.PREVIEW_VALID: "预览通过",
-            GuiState.PREVIEW_INVALID: "预览未通过", GuiState.GENERATING: "正在生成",
-            GuiState.SUCCESS: "生成成功", GuiState.FAILED: "操作失败",
-            GuiState.CANCELLED: "操作已取消",
+        tone, fallback_title = {
+            GuiState.EMPTY: ("neutral", "等待输入"),
+            GuiState.READY: ("info", "输入就绪"),
+            GuiState.PREPARING: ("info", "正在预览"),
+            GuiState.PREVIEW_VALID: ("success", "预览通过"),
+            GuiState.PREVIEW_INVALID: ("warning", "预览未通过"),
+            GuiState.GENERATING: ("info", "正在生成"),
+            GuiState.SUCCESS: ("success", "生成成功"),
+            GuiState.FAILED: ("error", "操作失败"),
+            GuiState.CANCELLED: ("warning", "操作已取消"),
         }[self.vm.state]
-        self.status_banner.setText(f"{state_text} · {self.vm.stage_name}")
+        self.status_banner.set_state(tone)
+        self.status_banner.set_message(self.vm.stage_name or fallback_title)
         self.progress.setValue(self.vm.progress_percent)
         self.progress.setVisible(self.vm.state in {GuiState.PREPARING, GuiState.GENERATING})
         self.output_error.setText(self.vm.output_error)
+        self.output_error.setVisible(bool(self.vm.output_error))
         self.result_group.setVisible(bool(self.vm.artifact_path))
         self.result_path.setText(self.vm.artifact_path)
         self.operation_label.setText(self.vm.operation_id or "—")
         self.session_label.setText(self.vm.session_id or "—")
+        has_issues = self.issue_model.rowCount() > 0
+        self.issue_table.setVisible(has_issues)
+        self.issue_empty.setVisible(not has_issues)
+        self.copy_issues_button.setEnabled(has_issues)
 
     def _rebuild_summary(self) -> None:
         self._clear_layout(self.check_layout)
         row = 0
         for input_file in self.vm.input_files:
             size = input_file.fingerprint.size if input_file.fingerprint else 0
-            self.check_layout.addWidget(QLabel("配置表" if input_file.role == "CONFIG" else "基准 ARXML"), row, 0)
-            self.check_layout.addWidget(QLabel(f"{Path(input_file.path).name} · {size / 1024 / 1024:.2f} MB"), row, 1)
+            self._add_check_row(row, "配置表" if input_file.role == "CONFIG" else "基准 ARXML",
+                                f"{Path(input_file.path).name} · {size / 1024 / 1024:.2f} MB", tone="mono")
             row += 1
         if self.vm.target_version:
-            self.check_layout.addWidget(QLabel("目标版本"), row, 0)
-            self.check_layout.addWidget(QLabel(self.vm.target_version), row, 1)
+            self._add_check_row(row, "目标版本", self.vm.target_version)
             row += 1
         for check in self.vm.checks:
-            self.check_layout.addWidget(QLabel(check.display_name), row, 0)
-            self.check_layout.addWidget(QLabel(f"✓ {check.detail or check.status}"), row, 1)
+            self._add_check_row(row, check.display_name, check.detail or check.status, tone="ok")
             row += 1
         self.check_group.setVisible(row > 0)
 
@@ -344,15 +447,28 @@ class MainWindow(QMainWindow):
         for index, feature in enumerate(self.vm.features):
             card = QFrame()
             card.setObjectName("featureCard")
+            card.setProperty("tone", self._feature_tone(feature))
             card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             layout = QVBoxLayout(card)
-            heading = QLabel(f"{feature.display_name} · {feature.status}")
-            heading.setStyleSheet("font-weight: 700;")
-            layout.addWidget(heading)
+            layout.setContentsMargins(14, 12, 14, 12)
+            layout.setSpacing(6)
+            heading = QHBoxLayout()
+            heading.setSpacing(8)
+            title = QLabel(feature.display_name)
+            title.setObjectName("featureTitle")
+            heading.addWidget(title)
+            heading.addStretch(1)
+            status = QLabel(feature.status)
+            status.setObjectName("featureStatus")
+            heading.addWidget(status)
+            layout.addLayout(heading)
             for metric in feature.metrics:
-                layout.addWidget(QLabel(f"{metric.label}：{metric.value}"))
+                value = QLabel(f"{metric.label}：{metric.value}")
+                value.setObjectName("featureMetric")
+                layout.addWidget(value)
             if feature.details:
                 detail_button = QPushButton("查看详情")
+                detail_button.setObjectName("linkButton")
                 detail_button.setAccessibleName(f"查看{feature.display_name}详情")
                 detail_button.clicked.connect(
                     lambda _checked=False, item=feature: self._show_feature_details(item),
@@ -360,6 +476,25 @@ class MainWindow(QMainWindow):
                 layout.addWidget(detail_button)
             self.feature_layout.addWidget(card, index // 2, index % 2)
         self.feature_group.setVisible(bool(self.vm.features))
+
+    def _add_check_row(self, row: int, caption: str, value: str, *, tone: str = "") -> None:
+        """输入检查的一行：左侧说明 + 右侧取值。"""
+        label = QLabel(caption)
+        label.setObjectName("mutedValue")
+        content = QLabel(value)
+        content.setObjectName({"mono": "monoValue", "ok": "checkValue"}.get(tone, "checkPlain"))
+        self.check_layout.addWidget(label, row, 0)
+        self.check_layout.addWidget(content, row, 1)
+
+    @staticmethod
+    def _feature_tone(feature: FeatureSummaryDto) -> str:
+        """按变更类型给摘要卡片着色。"""
+        actions = {detail.action for detail in feature.details}
+        if "DELETE" in actions:
+            return "delete"
+        if "ADD" in actions:
+            return "add"
+        return "info"
 
     def _show_feature_details(self, feature: FeatureSummaryDto) -> None:
         if self._detail_dialog is not None:
@@ -383,7 +518,7 @@ class MainWindow(QMainWindow):
             QApplication.clipboard().setText(text)
 
     def _toggle_advanced(self, checked: bool) -> None:
-        self.advanced_toggle.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+        self.advanced_toggle.setText("收起高级信息" if checked else "展开高级信息")
         self.advanced_panel.setVisible(checked)
 
     def _open_artifact_folder(self) -> None:
