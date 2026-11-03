@@ -74,6 +74,8 @@
 
 ## 当前边界
 
-桌面版只编排已有 GatewayFacade，不新增路由规则。当前不支持诊断/CanTp、直接报文 LIN 路由、多 ARXML 合并、DaVinci 自动导入/Validate、云端服务、遥测或自动更新。
+桌面版只编排已有 GatewayFacade，不新增路由规则。当前不支持直接报文 LIN 路由、多 ARXML 合并、DaVinci 自动导入/Validate、云端服务、遥测或自动更新。
+
+桌面版本身不监听端口。需要把客户端请求转发到独立核心时，使用单独的 Bridge 服务（见 [桌面端 Bridge 服务](桌面端Bridge服务.md)）；它默认只监听回环地址，并校验访问令牌。
 
 项目自身使用 MIT License。随包第三方组件及许可证原文见 `THIRD_PARTY_NOTICES.md` 和 `third-party-licenses`；正式对外交付前仍需公司合规或法务确认。

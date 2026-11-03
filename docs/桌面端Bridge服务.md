@@ -64,7 +64,7 @@ python -m davinci_gw.bridge --core http --core-target http://127.0.0.1:9100/mcp 
 {
   "schema_version": "1.0",
   "name": "davinci-gw-bridge",
-  "version": "1.2.2",
+  "version": "1.3.1",
   "pid": 1234,
   "host": "127.0.0.1",
   "port": 8765,
