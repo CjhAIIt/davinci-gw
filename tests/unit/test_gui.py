@@ -180,6 +180,37 @@ def test_severity_colour_and_status_banner_state(qtbot) -> None:
     assert window.status_banner.title.text() == "生成完成"
 
 
+def test_theme_switch_changes_stylesheet_and_remembers_choice(qtbot, tmp_path: Path) -> None:
+    """主题切换要立即换肤，并写入设置供下次启动沿用。"""
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QApplication
+
+    from UI.styles import DARK, LIGHT
+
+    # 把设置隔离到临时目录，避免测试改动真实的用户设置。
+    original_format = QSettings.defaultFormat()
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path))
+    try:
+        runner = _FakeRunner()
+        view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
+        window = MainWindow(view_model)
+        qtbot.addWidget(window)
+        app = QApplication.instance()
+        segments = {button.text(): button for button in window.theme_switch.findChildren(QPushButton)}
+        qtbot.mouseClick(segments["夜间"], Qt.LeftButton)
+        assert window.theme_switch.theme() == "dark"
+        assert DARK["canvas"] in app.styleSheet()
+        assert window.settings.value("ui/theme") == "dark"
+
+        qtbot.mouseClick(segments["白天"], Qt.LeftButton)
+        assert window.theme_switch.theme() == "light"
+        assert LIGHT["canvas"] in app.styleSheet()
+        assert window.settings.value("ui/theme") == "light"
+    finally:
+        QSettings.setDefaultFormat(original_format)
+
+
 def test_single_worker_thread_previews_and_commits_prepared_session(
     qtbot, workbook_factory, arxml_factory, tmp_path: Path,
 ) -> None:
