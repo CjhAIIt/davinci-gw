@@ -3,8 +3,16 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
+from PySide6.QtGui import QBrush, QColor
 
 from davinci_gw.contracts import IssueDto
+
+SEVERITY_COLORS = {
+    "ERROR": "#d64545",
+    "WARNING": "#c2820a",
+    "DECISION": "#2f5fe0",
+    "INFO": "#64748b",
+}
 
 
 class IssueTableModel(QAbstractTableModel):
@@ -93,6 +101,9 @@ class IssueTableModel(QAbstractTableModel):
             return values[index.column()]
         if role == Qt.UserRole:
             return issue.severity.upper()
+        if role == Qt.ForegroundRole and index.column() == 0:
+            color = SEVERITY_COLORS.get(issue.severity.upper())
+            return QBrush(QColor(color)) if color else None
         return None
 
     def copy_text(self, source_rows: set[int]) -> str:
