@@ -1,16 +1,19 @@
-"""DaVinci 网关路由工具的单窗口 Qt Widgets 界面。"""
+"""DaVinci 网关路由工具的单窗口 Qt Widgets 界面。
+
+窗口采用应用壳层结构：顶部全宽导航栏、左侧输入侧栏、右侧校验工作台、底部全宽状态栏。
+界面只做展示与编排，业务规则全部来自 ViewModel 与核心。
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QSettings, Qt, QUrl, Signal
+from PySide6.QtCore import QCoreApplication, QSettings, QSize, Qt, QUrl
 from PySide6.QtGui import QCloseEvent, QDesktopServices, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -31,23 +34,31 @@ from davinci_gw.contracts import FeatureSummaryDto
 
 from . import __version__
 from .components import (
+    BrandLogoWidget,
     FileDropEdit,
     FileSlot,
+    GridCanvasWidget,
+    InfoIconWidget,
     LegacyNotice,
     SectionCard,
     SegmentedFilter,
     StatusBanner,
     ThemeSwitch,
+    make_icon,
 )
 from .detail_dialog import FeatureDetailDialog, IssueDetailDialog
-from .issue_model import IssueFilterProxyModel, IssueTableModel
+from .issue_model import IssueFilterProxyModel, IssueTableDelegate, IssueTableModel
 from .logging_config import log_path
 from .state import GuiState
-from .styles import apply_theme, detect_system_theme
+from .styles import THEMES, apply_theme, detect_system_theme
 from .view_model import GatewayViewModel
 
 LAYOUT_BENTO = "bento"
 LAYOUT_LEGACY = "legacy"
+
+SIDEBAR_WIDTH = 470
+ISSUE_ROW_HEIGHT = 68
+ISSUE_MAX_VISIBLE_ROWS = 8
 
 
 class MainWindow(QMainWindow):
@@ -71,8 +82,8 @@ class MainWindow(QMainWindow):
         if app is not None:
             apply_theme(app, self._theme)
         self.setWindowTitle("DaVinci 网关路由工具")
-        self.setMinimumSize(1080, 720)
-        self.resize(1380, 900)
+        self.setMinimumSize(1080, 680)
+        self.resize(1440, 900)
         self.setAcceptDrops(True)
         self._build_ui()
         self._connect()
@@ -85,66 +96,90 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ 布局
 
     def _build_ui(self) -> None:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setObjectName("pageScroll")
-        scroll.setFrameShape(QFrame.NoFrame)
-        content = QWidget()
-        content.setObjectName("pageContent")
-        page = QVBoxLayout(content)
-        page.setContentsMargins(24, 20, 24, 22)
-        page.setSpacing(16)
+        shell = QWidget()
+        shell.setObjectName("appShell")
+        shell_layout = QVBoxLayout(shell)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(0)
 
-        center = QHBoxLayout()
-        center.setSpacing(0)
-        center.addStretch(1)
-        holder = QWidget()
-        holder.setObjectName("maxWidthHolder")
-        holder.setMaximumWidth(1380)
-        holder_layout = QVBoxLayout(holder)
-        holder_layout.setContentsMargins(0, 0, 0, 0)
-        holder_layout.setSpacing(16)
-        center.addWidget(holder, 10)
-        center.addStretch(1)
-        page.addLayout(center)
-
-        holder_layout.addWidget(self._build_header())
-
-        self.legacy_notice = LegacyNotice()
-        self.legacy_notice.setVisible(False)
-        holder_layout.addWidget(self.legacy_notice)
+        shell_layout.addWidget(self._build_header())
 
         self._mode_stack = QStackedWidget()
         self._mode_stack.setObjectName("bentoColumn")
-        holder_layout.addWidget(self._mode_stack, 1)
+        shell_layout.addWidget(self._mode_stack, 1)
 
-        # 新版：左侧输入与控制流，右侧状态与校验工作台。
-        self._bento_host = QWidget()
-        self._bento_host.setObjectName("bentoColumn")
-        bento = QHBoxLayout(self._bento_host)
+        # 新版：左侧输入侧栏 + 右侧校验工作台。
+        bento_host = QWidget()
+        bento_host.setObjectName("bentoColumn")
+        bento = QHBoxLayout(bento_host)
         bento.setContentsMargins(0, 0, 0, 0)
-        bento.setSpacing(16)
+        bento.setSpacing(0)
+
+        self.left_sidebar = QFrame()
+        self.left_sidebar.setObjectName("leftSidebar")
+        self.left_sidebar.setFixedWidth(SIDEBAR_WIDTH)
+        sidebar_layout = QVBoxLayout(self.left_sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(0)
+        self.left_scroll = QScrollArea()
+        self.left_scroll.setObjectName("leftScroll")
+        self.left_scroll.setWidgetResizable(True)
+        self.left_scroll.setFrameShape(QFrame.NoFrame)
         self._left_host = QWidget()
-        self._left_host.setObjectName("bentoColumn")
+        self._left_host.setObjectName("bentoLeft")
         self._left = QVBoxLayout(self._left_host)
-        self._left.setContentsMargins(0, 0, 0, 0)
-        self._left.setSpacing(16)
-        self._right_host = QWidget()
-        self._right_host.setObjectName("bentoColumn")
+        self._left.setContentsMargins(16, 14, 16, 16)
+        self._left.setSpacing(14)
+        self.left_scroll.setWidget(self._left_host)
+        sidebar_layout.addWidget(self.left_scroll)
+        bento.addWidget(self.left_sidebar)
+
+        self._right_area = QWidget()
+        self._right_area.setObjectName("bentoRight")
+        area_layout = QVBoxLayout(self._right_area)
+        area_layout.setContentsMargins(0, 0, 0, 0)
+        area_layout.setSpacing(0)
+        self.page_scroll = QScrollArea()
+        self.page_scroll.setObjectName("pageScroll")
+        self.page_scroll.setWidgetResizable(True)
+        self.page_scroll.setFrameShape(QFrame.NoFrame)
+        self._right_host = GridCanvasWidget()
         self._right = QVBoxLayout(self._right_host)
-        self._right.setContentsMargins(0, 0, 0, 0)
-        self._right.setSpacing(16)
-        bento.addWidget(self._left_host, 5)
-        bento.addWidget(self._right_host, 7)
-        self._mode_stack.addWidget(self._bento_host)
+        self._right.setContentsMargins(20, 14, 20, 18)
+        self._right.setSpacing(14)
+        self.page_scroll.setWidget(self._right_host)
+        area_layout.addWidget(self.page_scroll)
+        bento.addWidget(self._right_area, 1)
+        self._mode_stack.addWidget(bento_host)
 
         # 原版：单栏长条布局，用于对比查看。
+        legacy_host = QWidget()
+        legacy_host.setObjectName("bentoColumn")
+        legacy_area = QVBoxLayout(legacy_host)
+        legacy_area.setContentsMargins(0, 0, 0, 0)
+        legacy_area.setSpacing(0)
+        self.legacy_scroll = QScrollArea()
+        self.legacy_scroll.setObjectName("pageScroll")
+        self.legacy_scroll.setWidgetResizable(True)
+        self.legacy_scroll.setFrameShape(QFrame.NoFrame)
         self._legacy_host = QWidget()
-        self._legacy_host.setObjectName("bentoColumn")
+        self._legacy_host.setObjectName("bentoLeft")
         self._legacy = QVBoxLayout(self._legacy_host)
-        self._legacy.setContentsMargins(0, 0, 0, 0)
-        self._legacy.setSpacing(16)
-        self._mode_stack.addWidget(self._legacy_host)
+        self._legacy.setContentsMargins(24, 18, 24, 18)
+        self._legacy.setSpacing(14)
+        self.legacy_scroll.setWidget(self._legacy_host)
+        legacy_area.addWidget(self.legacy_scroll)
+        self._mode_stack.addWidget(legacy_host)
+
+        self.legacy_notice = LegacyNotice()
+        self.legacy_notice.setVisible(False)
+        self._legacy.insertWidget(0, self.legacy_notice)
+
+        self.status_banner = StatusBanner()
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(6)
 
         self._build_input_card()
         self._build_actions_card()
@@ -153,42 +188,33 @@ class MainWindow(QMainWindow):
         self._build_feature_card()
         self._build_issues_card()
         self._build_telemetry_bar()
-
-        self.status_banner = StatusBanner()
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 100)
-        self.progress.setTextVisible(False)
-        self.progress.setFixedHeight(8)
         self._set_layout_mode(LAYOUT_BENTO)
 
-        scroll.setWidget(content)
-        self.setCentralWidget(scroll)
+        shell_layout.addWidget(self._telemetry_bar)
+        self.setCentralWidget(shell)
 
         QShortcut(QKeySequence("Ctrl+P"), self, activated=self.vm.start_preview)
         QShortcut(QKeySequence("Ctrl+G"), self, activated=self.vm.start_generate)
         QShortcut(QKeySequence("Esc"), self, activated=self.vm.cancel)
 
     def _build_header(self) -> QWidget:
-        """页头：标题、说明、布局切换、主题与版本标识。"""
+        """顶部全宽导航栏：品牌标识、标题、说明与右侧操作。"""
         header = QFrame()
-        header.setObjectName("sectionCard")
+        header.setObjectName("topHeaderBar")
+        header.setFixedHeight(66)
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(16)
+        layout.setContentsMargins(20, 8, 20, 8)
+        layout.setSpacing(12)
 
-        icon = QLabel("D")
-        icon.setObjectName("fileSlotIcon")
-        icon.setFixedSize(38, 38)
-        icon.setAlignment(Qt.AlignCenter)
-        layout.addWidget(icon)
+        self.brand_logo = BrandLogoWidget()
+        layout.addWidget(self.brand_logo, 0, Qt.AlignVCenter)
 
         text_box = QVBoxLayout()
-        text_box.setSpacing(3)
+        text_box.setSpacing(2)
         title_row = QHBoxLayout()
         title_row.setSpacing(8)
         title = QLabel("DaVinci 网关路由配置生成")
         title.setObjectName("pageTitle")
-        title.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         title_row.addWidget(title)
         version_chip = QLabel(f"v{__version__}")
         version_chip.setObjectName("versionChip")
@@ -204,6 +230,12 @@ class MainWindow(QMainWindow):
         subtitle.setObjectName("pageSubtitle")
         text_box.addWidget(subtitle)
         layout.addLayout(text_box, 1)
+
+        divider = QFrame()
+        divider.setObjectName("headerDivider")
+        divider.setFixedWidth(1)
+        divider.setFixedHeight(28)
+        layout.addWidget(divider, 0, Qt.AlignVCenter)
 
         self.demo_button = QPushButton("一键填入测试数据并预览")
         self.demo_button.setObjectName("demoChip")
@@ -231,61 +263,89 @@ class MainWindow(QMainWindow):
         return None
 
     def _build_input_card(self) -> None:
-        self._input_card = SectionCard("选择输入文件", step="1", hint="支持拖入文件")
-        self.config_slot = FileSlot("标准配置表", ".xlsx", "表")
-        self.baseline_slot = FileSlot("基准 ARXML", ".arxml", "基")
+        self._input_card = SectionCard(
+            "选择输入文件", icon_kind="upload", inline_hint="支持拖入文件",
+        )
+        self.config_slot = FileSlot("标准配置表", ".xlsx")
+        self.baseline_slot = FileSlot("基准 ARXML", ".arxml")
         self.config_edit = self.config_slot.edit
         self.baseline_edit = self.baseline_slot.edit
         self._input_card.body.addWidget(self.config_slot)
         self._input_card.body.addWidget(self.baseline_slot)
+
+        callout = QFrame()
+        callout.setObjectName("infoCallout")
+        callout_layout = QHBoxLayout(callout)
+        callout_layout.setContentsMargins(12, 10, 12, 10)
+        callout_layout.setSpacing(9)
+        callout_layout.addWidget(InfoIconWidget(), 0, Qt.AlignTop)
         hint = QLabel(
-            "标准配置表需符合本项目的输入契约（*_vX.x.xlsx）；"
+            "标准配置表需符合本项目的输入契约（*_vX.x.xlsx，支持 v4.83-4.85 区间命名）；"
             "基准 ARXML 需包含 CanIf、EcuC、PduR，信号路由还需要 Com。"
         )
         hint.setObjectName("fieldHint")
         hint.setWordWrap(True)
-        self._input_card.body.addWidget(hint)
+        callout_layout.addWidget(hint, 1)
+        self._input_card.body.addWidget(callout)
 
     def _build_actions_card(self) -> None:
-        self._actions_card = SectionCard("预览并生成", step="2", hint="先预览并确认，再生成新文件")
-        layout = QGridLayout()
-        layout.setHorizontalSpacing(12)
-        layout.setVerticalSpacing(10)
-        self.output_edit = QLineEdit()
-        self.output_edit.setPlaceholderText("预览通过后自动建议输出路径")
-        self.output_edit.setAccessibleName("输出 ARXML 路径")
-        self.output_button = QPushButton("选择输出…")
+        self._actions_card = SectionCard(
+            "预览并生成", icon_kind="bolt", hint="先预览并确认，再生成新文件",
+        )
+        layout = QVBoxLayout()
+        layout.setSpacing(10)
+
+        output_row = QVBoxLayout()
+        output_row.setSpacing(6)
         output_label = QLabel("输出文件")
         output_label.setObjectName("fieldLabel")
-        layout.addWidget(output_label, 0, 0)
-        layout.addWidget(self.output_edit, 0, 1)
-        layout.addWidget(self.output_button, 0, 2)
+        output_row.addWidget(output_label)
+        output_path_row = QHBoxLayout()
+        output_path_row.setSpacing(8)
+        self.output_edit = QLineEdit()
+        self.output_edit.setObjectName("outputPathEdit")
+        self.output_edit.setPlaceholderText("预览通过后自动建议输出路径")
+        self.output_edit.setAccessibleName("输出 ARXML 路径")
+        output_path_row.addWidget(self.output_edit, 1)
+        self.output_button = QPushButton("选择输出…")
+        self.output_button.setCursor(Qt.PointingHandCursor)
+        output_path_row.addWidget(self.output_button, 0)
+        output_row.addLayout(output_path_row)
+        layout.addLayout(output_row)
+
         self.output_error = QLabel()
         self.output_error.setObjectName("outputError")
         self.output_error.setWordWrap(True)
-        layout.addWidget(self.output_error, 1, 1, 1, 2)
-        self.preview_button = QPushButton("预览变更")
-        self.generate_button = QPushButton("生成 ARXML")
-        self.generate_button.setObjectName("primaryButton")
+        self.output_error.setVisible(False)
+        layout.addWidget(self.output_error)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+        buttons.addStretch(1)
         self.cancel_button = QPushButton("取消")
         self.cancel_button.setObjectName("dangerButton")
-        buttons = QHBoxLayout()
-        buttons.setSpacing(10)
-        buttons.addStretch(1)
+        self.cancel_button.setCursor(Qt.PointingHandCursor)
+        self.preview_button = QPushButton("预览变更")
+        self.preview_button.setObjectName("previewButton")
+        self.preview_button.setCursor(Qt.PointingHandCursor)
+        self.generate_button = QPushButton("生成 ARXML")
+        self.generate_button.setObjectName("primaryButton")
+        self.generate_button.setCursor(Qt.PointingHandCursor)
         buttons.addWidget(self.cancel_button)
         buttons.addWidget(self.preview_button)
         buttons.addWidget(self.generate_button)
-        layout.addLayout(buttons, 2, 1, 1, 2)
+        layout.addLayout(buttons)
+
         self.gate_hint = QLabel()
         self.gate_hint.setObjectName("gateHint")
         self.gate_hint.setWordWrap(True)
         self.gate_hint.setVisible(False)
-        layout.addWidget(self.gate_hint, 3, 1, 1, 2)
-        layout.setColumnStretch(1, 1)
+        layout.addWidget(self.gate_hint)
+
         self._actions_card.body.addLayout(layout)
 
     def _build_result_card(self) -> None:
-        self.result_group = SectionCard("生成结果")
+        self.result_group = SectionCard("生成结果", icon_kind="folder")
         layout = QVBoxLayout()
         layout.setSpacing(8)
         self.result_path = QLabel()
@@ -296,7 +356,9 @@ class MainWindow(QMainWindow):
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
         self.open_folder_button = QPushButton("打开所在文件夹")
+        self.open_folder_button.setCursor(Qt.PointingHandCursor)
         self.copy_path_button = QPushButton("复制路径")
+        self.copy_path_button.setCursor(Qt.PointingHandCursor)
         buttons.addWidget(self.open_folder_button)
         buttons.addWidget(self.copy_path_button)
         buttons.addStretch(1)
@@ -304,23 +366,21 @@ class MainWindow(QMainWindow):
         self.result_group.body.addLayout(layout)
 
     def _build_check_card(self) -> None:
-        self.check_group = SectionCard("输入检查")
-        self.check_layout = QGridLayout()
-        self.check_layout.setHorizontalSpacing(18)
-        self.check_layout.setVerticalSpacing(8)
-        self.check_layout.setColumnStretch(0, 0)
-        self.check_layout.setColumnStretch(1, 1)
+        self.check_group = SectionCard("输入检查", icon_kind="pulse")
+        self.check_layout = QVBoxLayout()
+        self.check_layout.setSpacing(7)
         self.check_group.body.addLayout(self.check_layout)
 
     def _build_feature_card(self) -> None:
-        self.feature_group = SectionCard("变更摘要")
-        self.feature_layout = QGridLayout()
-        self.feature_layout.setHorizontalSpacing(12)
-        self.feature_layout.setVerticalSpacing(12)
+        self.feature_group = SectionCard("变更摘要", icon_kind="bolt")
+        self.feature_layout = QVBoxLayout()
+        self.feature_layout.setSpacing(10)
         self.feature_group.body.addLayout(self.feature_layout)
 
     def _build_issues_card(self) -> None:
-        self._issues_card = SectionCard("问题与保留决定", hint="错误会阻止生成；警告与保留决定需人工确认")
+        self._issues_card = SectionCard(
+            "问题与保留决定", icon_kind="eye", hint="错误会阻止生成；警告与保留决定需人工确认",
+        )
         layout = QVBoxLayout()
         layout.setSpacing(10)
         toolbar = QHBoxLayout()
@@ -329,10 +389,14 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.filter_pills)
         toolbar.addStretch(1)
         self.search_edit = QLineEdit()
+        self.search_edit.setObjectName("searchInput")
         self.search_edit.setPlaceholderText("搜索代码、说明、位置或建议")
-        self.search_edit.setFixedWidth(260)
+        self.search_edit.setFixedWidth(240)
         self.copy_issues_button = QPushButton("复制所选")
+        self.copy_issues_button.setCursor(Qt.PointingHandCursor)
         self.ack_button = QPushButton("批量确认")
+        self.ack_button.setObjectName("ackBatchButton")
+        self.ack_button.setCursor(Qt.PointingHandCursor)
         toolbar.addWidget(self.search_edit)
         toolbar.addWidget(self.copy_issues_button)
         toolbar.addWidget(self.ack_button)
@@ -343,21 +407,23 @@ class MainWindow(QMainWindow):
         self.issue_proxy.setSourceModel(self.issue_model)
         self.issue_table = QTableView()
         self.issue_table.setModel(self.issue_proxy)
+        self.issue_delegate = IssueTableDelegate(self._theme, self.issue_table)
+        self.issue_table.setItemDelegate(self.issue_delegate)
         self.issue_table.setSortingEnabled(True)
         self.issue_table.setSelectionBehavior(QTableView.SelectRows)
         self.issue_table.setShowGrid(False)
-        self.issue_table.setAlternatingRowColors(True)
-        self.issue_table.setMinimumHeight(240)
+        self.issue_table.setAlternatingRowColors(False)
+        self.issue_table.setMinimumHeight(260)
         header = self.issue_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        for column, width in ((1, 165), (2, 125), (3, 125), (5, 115)):
+        for column in (2, 3, 6):
+            # 报文 ID、报文名称与处理建议已并入自绘单元格的副行，不再单列展示。
+            self.issue_table.setColumnHidden(column, True)
+        for column, width in ((0, 132), (1, 232), (5, 216), (7, 128)):
             header.setSectionResizeMode(column, QHeaderView.Interactive)
             self.issue_table.setColumnWidth(column, width)
         header.setSectionResizeMode(4, QHeaderView.Stretch)
-        header.setSectionResizeMode(6, QHeaderView.Stretch)
-        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
         self.issue_table.verticalHeader().setVisible(False)
-        self.issue_table.verticalHeader().setDefaultSectionSize(30)
+        self.issue_table.verticalHeader().setDefaultSectionSize(68)
         list_frame = QFrame()
         list_frame.setObjectName("issueListFrame")
         list_layout = QVBoxLayout(list_frame)
@@ -372,12 +438,12 @@ class MainWindow(QMainWindow):
         self._issues_card.body.addLayout(layout)
 
     def _build_telemetry_bar(self) -> None:
-        """底部紧凑元数据条：操作 ID、会话 ID、版本与日志入口。"""
+        """底部全宽状态条：操作 ID、会话 ID、版本与日志入口。"""
         self._telemetry_bar = QFrame()
         self._telemetry_bar.setObjectName("telemetryBar")
         layout = QHBoxLayout(self._telemetry_bar)
-        layout.setContentsMargins(2, 8, 2, 2)
-        layout.setSpacing(16)
+        layout.setContentsMargins(20, 7, 20, 7)
+        layout.setSpacing(18)
         self.operation_label = QLabel("操作 ID —")
         self.session_label = QLabel("会话 ID —")
         self.version_label = QLabel(f"版本 {__version__}")
@@ -407,7 +473,7 @@ class MainWindow(QMainWindow):
         for widget in (self._input_card, self._actions_card, self.result_group):
             self._place(widget, left)
         for widget in (self.status_banner, self.progress, self._issues_card, self.check_group,
-                       self.feature_group, self._telemetry_bar):
+                       self.feature_group):
             self._place(widget, right)
         if bento:
             self._left.addStretch(1)
@@ -416,6 +482,11 @@ class MainWindow(QMainWindow):
             self._legacy.addStretch(1)
         self._mode_stack.setCurrentIndex(0 if bento else 1)
         self._layout_mode = mode
+        # 换布局会重新挂载卡片，这里恢复由业务状态决定的显隐，避免空卡片与残留进度条。
+        self.result_group.setVisible(bool(self.vm.artifact_path))
+        self.check_group.setVisible(bool(self.vm.input_files or self.vm.target_version or self.vm.checks))
+        self.feature_group.setVisible(bool(self.vm.features))
+        self.progress.setVisible(self.vm.state in {GuiState.PREPARING, GuiState.GENERATING})
         self.legacy_notice.setVisible(not bento)
         self.layout_toggle.setText(
             "当前：双栏紧凑布局（点击对比原版长条）" if bento
@@ -447,7 +518,9 @@ class MainWindow(QMainWindow):
         self.generate_button.clicked.connect(self.vm.start_generate)
         self.cancel_button.clicked.connect(self.vm.cancel)
         self.filter_pills.severity_changed.connect(self.issue_proxy.set_severity)
+        self.filter_pills.severity_changed.connect(self._on_filter_changed)
         self.search_edit.textChanged.connect(self.issue_proxy.set_search)
+        self.search_edit.textChanged.connect(lambda _text: self._on_filter_changed())
         self.copy_issues_button.clicked.connect(self._copy_issues)
         self.ack_button.clicked.connect(self._acknowledge_visible)
         self.issue_table.doubleClicked.connect(self._show_issue_details)
@@ -459,6 +532,7 @@ class MainWindow(QMainWindow):
         self.open_folder_button.clicked.connect(self._open_artifact_folder)
         self.copy_path_button.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.vm.artifact_path))
         self.open_log_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_path().parent))))
+        self._refresh_icons()
 
     def _toggle_layout(self) -> None:
         self._set_layout_mode(LAYOUT_LEGACY if self._layout_mode == LAYOUT_BENTO else LAYOUT_BENTO)
@@ -476,6 +550,18 @@ class MainWindow(QMainWindow):
     def _issue_model_changed(self, issues) -> None:
         self.issue_model.set_issues(issues)
         self._refresh_filter_counts()
+        self._sync_issue_table_height()
+
+    def _sync_issue_table_height(self) -> None:
+        """按可见问题条数调整表格高度，避免只露出两三行。"""
+        rows = self.issue_proxy.rowCount()
+        visible = min(max(rows, 1), ISSUE_MAX_VISIBLE_ROWS)
+        header = self.issue_table.horizontalHeader().height() or 34
+        self.issue_table.setFixedHeight(header + visible * ISSUE_ROW_HEIGHT + 2)
+
+    def _on_filter_changed(self, *args) -> None:
+        """级别筛选或搜索后同步表格高度。"""
+        self._sync_issue_table_height()
 
     def _sync_confirmation_state(self) -> None:
         """把待确认数量同步给 ViewModel，作为生成的唯一门禁。"""
@@ -588,10 +674,9 @@ class MainWindow(QMainWindow):
             GuiState.CANCELLED: ("warning", "操作已取消"),
         }[self.vm.state]
         self.status_banner.set_state(tone)
-        detail = self.vm.stage_name or fallback_title
-        if pending:
-            detail = f"{detail} · {pending} 项警告或保留决定待确认"
-        self.status_banner.set_message(detail)
+        title = self.vm.stage_name or fallback_title
+        detail = f"{pending} 项警告或保留决定待确认" if pending else ""
+        self.status_banner.set_message(title, detail)
         self.status_banner.set_step(self._pipeline_step(), 3)
         self.progress.setValue(self.vm.progress_percent)
         self.progress.setVisible(self.vm.state in {GuiState.PREPARING, GuiState.GENERATING})
@@ -618,22 +703,20 @@ class MainWindow(QMainWindow):
 
     def _rebuild_summary(self) -> None:
         self._clear_layout(self.check_layout)
-        row = 0
         for input_file in self.vm.input_files:
             size = input_file.fingerprint.size if input_file.fingerprint else 0
-            self._add_check_row(row, "配置表" if input_file.role == "CONFIG" else "基准 ARXML",
-                                f"{Path(input_file.path).name} · {size / 1024 / 1024:.2f} MB", tone="mono")
-            row += 1
+            self._add_check_row(
+                "配置表" if input_file.role == "CONFIG" else "基准 ARXML",
+                f"{Path(input_file.path).name} · {size / 1024 / 1024:.2f} MB", tone="mono",
+            )
         if self.vm.target_version:
-            self._add_check_row(row, "目标版本", self.vm.target_version)
-            row += 1
+            self._add_check_row("目标版本", self.vm.target_version)
         for check in self.vm.checks:
-            self._add_check_row(row, check.display_name, check.detail or check.status, tone="ok")
-            row += 1
-        self.check_group.setVisible(row > 0)
+            self._add_check_row(check.display_name, check.detail or check.status, tone="ok")
+        self.check_group.setVisible(bool(self.vm.input_files or self.vm.target_version or self.vm.checks))
 
         self._clear_layout(self.feature_layout)
-        for index, feature in enumerate(self.vm.features):
+        for feature in self.vm.features:
             card = QFrame()
             card.setObjectName("featureCard")
             card.setProperty("tone", self._feature_tone(feature))
@@ -663,17 +746,22 @@ class MainWindow(QMainWindow):
                     lambda _checked=False, item=feature: self._show_feature_details(item),
                 )
                 layout.addWidget(detail_button)
-            self.feature_layout.addWidget(card, index // 2, index % 2)
+            self.feature_layout.addWidget(card)
         self.feature_group.setVisible(bool(self.vm.features))
 
-    def _add_check_row(self, row: int, caption: str, value: str, *, tone: str = "") -> None:
+    def _add_check_row(self, caption: str, value: str, *, tone: str = "") -> None:
         """输入检查的一行：左侧说明 + 右侧取值。"""
+        row = QHBoxLayout()
+        row.setSpacing(12)
         label = QLabel(caption)
         label.setObjectName("mutedValue")
+        label.setFixedWidth(112)
         content = QLabel(value)
         content.setObjectName({"mono": "monoValue", "ok": "checkValue"}.get(tone, "checkPlain"))
-        self.check_layout.addWidget(label, row, 0)
-        self.check_layout.addWidget(content, row, 1)
+        content.setWordWrap(True)
+        row.addWidget(label, 0, Qt.AlignTop)
+        row.addWidget(content, 1)
+        self.check_layout.addLayout(row)
 
     @staticmethod
     def _feature_tone(feature: FeatureSummaryDto) -> str:
@@ -699,12 +787,29 @@ class MainWindow(QMainWindow):
             item = layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+            elif item.layout():
+                child = item.layout()
+                while child.count():
+                    inner = child.takeAt(0)
+                    if inner.widget():
+                        inner.widget().deleteLater()
 
     def _copy_issues(self) -> None:
         rows = {self.issue_proxy.mapToSource(index).row() for index in self.issue_table.selectionModel().selectedRows()}
         text = self.issue_model.copy_text(rows)
         if text:
             QApplication.clipboard().setText(text)
+
+    def _refresh_icons(self) -> None:
+        """按当前主题刷新按钮图标。"""
+        colors = THEMES.get(self._theme, THEMES["light"])
+        self.preview_button.setIcon(make_icon("search", colors["accent"], 16))
+        self.generate_button.setIcon(make_icon("play", colors["on_accent"], 16))
+        self.output_button.setIcon(make_icon("folder", colors["button_fg"], 16))
+        self.open_folder_button.setIcon(make_icon("folder", colors["accent"], 16))
+        for button in (self.preview_button, self.generate_button, self.output_button,
+                       self.open_folder_button):
+            button.setIconSize(QSize(16, 16))
 
     def _apply_theme(self, theme: str) -> None:
         """切换白天 / 夜间主题，并记住用户的选择。"""
@@ -713,6 +818,12 @@ class MainWindow(QMainWindow):
         if app is not None:
             apply_theme(app, theme)
         self.settings.setValue("ui/theme", theme)
+        self.config_slot.set_theme(theme)
+        self.baseline_slot.set_theme(theme)
+        self._right_host.set_theme(theme)
+        self.issue_delegate.set_theme(theme)
+        self.issue_table.viewport().update()
+        self._refresh_icons()
 
     def _open_artifact_folder(self) -> None:
         if self.vm.artifact_path:

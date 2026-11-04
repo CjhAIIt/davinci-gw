@@ -8,7 +8,7 @@ from PySide6.QtCore import QObject, Signal, Qt
 from PySide6.QtWidgets import QLabel, QPushButton
 
 from UI.components import PillButton
-from UI.issue_model import IssueTableModel
+from UI.issue_model import IssueTableDelegate, IssueTableModel
 from UI.main_window import MainWindow
 from UI.output_paths import suggest_output_path, validate_output_path
 from UI.state import GuiState, controls_for
@@ -279,6 +279,32 @@ def test_warning_and_decision_rows_can_be_acknowledged(qtbot) -> None:
 def test_output_path_suggestion_is_skipped_without_a_baseline() -> None:
     """没有基准文件时不得抛出异常，界面事件处理不能因此中断。"""
     assert suggest_output_path("") == ""
+
+
+def test_issue_table_uses_the_custom_delegate_and_folded_columns(qtbot) -> None:
+    """问题表用自绘委托呈现，并把报文 ID、报文名称与处理建议并入副行。"""
+    runner = _FakeRunner()
+    view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    assert isinstance(window.issue_table.itemDelegate(), IssueTableDelegate)
+    for column in (2, 3, 6):
+        assert window.issue_table.isColumnHidden(column)
+    assert not window.issue_table.isColumnHidden(4)
+
+
+def test_switching_layout_keeps_empty_cards_hidden(qtbot) -> None:
+    """切换到原版单栏模式时，空的生成结果与进度条不能被重新显示。"""
+    runner = _FakeRunner()
+    view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    window._toggle_layout()
+    assert not window.result_group.isVisible()
+    assert not window.progress.isVisible()
+    assert not window.feature_group.isVisible()
 
 
 def test_generation_is_blocked_until_every_warning_is_acknowledged(qtbot, tmp_path: Path) -> None:
