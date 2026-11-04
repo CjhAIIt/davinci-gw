@@ -16,8 +16,14 @@ def _available_path(candidate: Path) -> Path:
 
 
 def suggest_output_path(baseline_path: str, target_version: str | None = None) -> str:
-    """在基线目录生成不覆盖现有文件的建议路径。"""
+    """在基线目录生成不覆盖现有文件的建议路径。
+
+    基线路径为空或没有文件名时返回空字符串，调用方应据此跳过建议，
+    避免在界面事件处理里抛出异常。
+    """
     baseline = Path(baseline_path).expanduser()
+    if not baseline.name:
+        return ""
     suffix = f"_v{target_version}" if target_version else "_new"
     return str(_available_path(baseline.with_name(f"{baseline.stem}{suffix}.arxml")))
 

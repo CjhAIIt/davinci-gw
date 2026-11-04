@@ -22,6 +22,11 @@ class BearerTokenMiddleware:
         self._app = app
         self._token = token
 
+    @property
+    def expected_token(self) -> str:
+        """本次启动要求的令牌；与客户端发现文件中的令牌必须一致。"""
+        return self._token
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope.get("type") != "http":
             await self._app(scope, receive, send)

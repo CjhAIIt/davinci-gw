@@ -15,6 +15,7 @@ from davinci_gw.bridge.core import (
     HttpCore,
     StdioCore,
     _extract_payload,
+    _SessionCore,
     build_core,
 )
 
@@ -123,3 +124,93 @@ def test_build_core_selects_the_configured_core() -> None:
 def test_build_core_rejects_invalid_configuration() -> None:
     with pytest.raises(BridgeConfigError):
         build_core(CoreConfig(mode="stdio"))
+
+
+class _FakeSessionClient:
+    """最小 MCP 客户端替身：可控制响应延迟。"""
+
+    def __init__(self, delay: float = 0.0) -> None:
+        self.delay = delay
+        self.calls: list[str] = []
+
+    async def call_tool(self, name: str, arguments: Any) -> Any:
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        self.calls.append(name)
+        return _FakeResult(structured_content=_envelope(name))
+
+    async def __aenter__(self) -> "_FakeSessionClient":
+        return self
+
+    async def __aexit__(self, *args: Any) -> bool:
+        return False
+
+
+class _SessionCoreStub(_SessionCore):
+    """可观测建连次数与延迟的会话核心。"""
+
+    def __init__(self, *, delay: float = 0.0, timeout_seconds: float | None = None) -> None:
+        super().__init__(timeout_seconds=timeout_seconds)
+        self.sessions = 0
+        self.client = _FakeSessionClient(delay=delay)
+
+    async def _make_client(self) -> Any:
+        self.sessions += 1
+        await asyncio.sleep(0.05)
+        return self.client
+
+
+def test_concurrent_first_calls_share_a_single_session() -> None:
+    """并发首次调用必须等待同一次建连，而不是直接判定核心不可用。"""
+    core = _SessionCoreStub()
+
+    async def scenario() -> None:
+        results = await asyncio.gather(
+            core.call_tool("get_gateway_capabilities", {}),
+            core.call_tool("get_gateway_capabilities", {}),
+            core.call_tool("get_gateway_capabilities", {}),
+        )
+        assert [item["status"] for item in results] == ["SUCCESS"] * 3
+        await core.aclose()
+
+    asyncio.run(scenario())
+    assert core.sessions == 1
+
+
+def test_core_call_respects_the_configured_timeout() -> None:
+    """核心调用超时必须真正生效，而不是只做参数校验。"""
+    core = _SessionCoreStub(delay=5.0, timeout_seconds=0.05)
+
+    async def scenario() -> None:
+        with pytest.raises(CoreUnavailableError) as failure:
+            await core.call_tool("get_gateway_capabilities", {})
+        assert "超时" in str(failure.value)
+        await core.aclose()
+
+    asyncio.run(scenario())
+
+
+class _SlowService(_FakeService):
+    """处理过程很慢的核心服务替身。"""
+
+    async def validate_gateway_inputs(self, **kwargs: Any) -> dict[str, Any]:
+        await asyncio.sleep(5)
+        return _envelope("validate_gateway_inputs")
+
+
+def test_embedded_core_applies_the_timeout() -> None:
+    core = EmbeddedCore(_SlowService(), timeout_seconds=0.05)
+
+    async def scenario() -> None:
+        with pytest.raises(CoreUnavailableError):
+            await core.call_tool("validate_gateway_inputs", {
+                "config_path": "C:/tmp/a.xlsx", "baseline_path": "C:/tmp/a.arxml",
+            })
+
+    asyncio.run(scenario())
+
+
+def test_build_core_passes_the_timeout_to_the_core() -> None:
+    assert build_core(CoreConfig(mode="embedded", timeout_seconds=12.5))._timeout_seconds == 12.5
+    assert build_core(CoreConfig(mode="http", target="http://127.0.0.1:9100/mcp",
+                                 timeout_seconds=30.0))._timeout_seconds == 30.0

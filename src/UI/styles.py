@@ -407,6 +407,10 @@ QLabel#outputError {{
     color: {c['danger']};
     font-size: 12px;
 }}
+QLabel#gateHint {{
+    color: {c['warning']};
+    font-size: 12px;
+}}
 
 /* ---------- 输入控件 ---------- */
 QLineEdit, QComboBox {{
@@ -488,9 +492,9 @@ QPushButton#primaryButton:pressed {{
     border-color: {c['accent_pressed']};
 }}
 QPushButton#primaryButton:disabled {{
-    background: {c['accent_muted']};
-    border-color: {c['accent_muted']};
-    color: {c['on_accent']};
+    background: {c['disabled_bg']};
+    border-color: {c['border']};
+    color: {c['text_muted']};
 }}
 QPushButton#ghostButton {{
     background: transparent;

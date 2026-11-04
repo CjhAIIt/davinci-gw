@@ -55,6 +55,15 @@ def test_effective_token_is_generated_when_missing() -> None:
     assert BridgeConfig(token="fixed-token").effective_token == "fixed-token"
 
 
+def test_effective_token_stays_the_same_for_the_whole_process() -> None:
+    """令牌在进程生命周期内固定：发现文件与服务端鉴权必须拿到同一个值。"""
+    config = BridgeConfig()
+    assert config.effective_token == config.effective_token
+    assert config.token == config.effective_token
+    # 不同实例使用不同令牌，避免多实例互相串用。
+    assert BridgeConfig().effective_token != config.effective_token
+
+
 def test_core_description_never_leaks_the_token() -> None:
     described = CoreConfig(mode="http", target="http://127.0.0.1:9100/mcp", token="secret").describe()
     assert "secret" not in str(described)

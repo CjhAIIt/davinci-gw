@@ -32,6 +32,17 @@ class CoreUnavailableError(RuntimeError):
     """核心不可达、不支持该工具，或返回了无法解析的结果。"""
 
 
+async def _await_with_timeout(awaitable: Any, timeout_seconds: float | None, label: str) -> Any:
+    """在可选超时下等待一个 awaitable，超时统一转为核心不可用。"""
+    try:
+        if timeout_seconds is None:
+            return await awaitable
+        return await asyncio.wait_for(awaitable, timeout_seconds)
+    except asyncio.TimeoutError as exc:
+        LOGGER.error("core call timeout label=%s timeout=%.3fs", label, timeout_seconds)
+        raise CoreUnavailableError(f"核心调用超时（{timeout_seconds} 秒）：{label}") from exc
+
+
 class CoreClient(Protocol):
     """桥接对核心的最小要求。"""
 
@@ -63,12 +74,13 @@ def _extract_payload(result: Any) -> dict[str, Any]:
 class EmbeddedCore:
     """进程内核心：复用 MCP 服务的应用层逻辑，不引入额外 IPC。"""
 
-    def __init__(self, service: Any | None = None) -> None:
+    def __init__(self, service: Any | None = None, *, timeout_seconds: float | None = None) -> None:
         if service is None:
             from davinci_gw.mcp.service import GatewayMcpService
 
             service = GatewayMcpService()
         self._service = service
+        self._timeout_seconds = timeout_seconds
 
     async def call_tool(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         handlers = {
@@ -82,7 +94,7 @@ class EmbeddedCore:
             raise CoreUnavailableError(f"核心不支持工具 {name}。")
         payload = handler(**dict(arguments))
         if hasattr(payload, "__await__"):
-            payload = await payload
+            payload = await _await_with_timeout(payload, self._timeout_seconds, name)
         return dict(payload)
 
     async def aclose(self) -> None:
@@ -101,12 +113,14 @@ class _SessionCore:
     因此这里用专属任务承载会话生命周期；关闭时只发信号并等待该任务收尾。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, timeout_seconds: float | None = None) -> None:
         self._client: Any | None = None
         self._task: asyncio.Task[None] | None = None
         self._ready: asyncio.Event | None = None
         self._stop: asyncio.Event | None = None
         self._error: BaseException | None = None
+        self._lock: asyncio.Lock | None = None
+        self._timeout_seconds = timeout_seconds
 
     async def _make_client(self) -> Any:
         raise NotImplementedError
@@ -124,17 +138,28 @@ class _SessionCore:
             self._ready.set()
 
     async def start(self) -> None:
+        """建立核心会话；并发首次调用共享同一次建连。
+
+        多个请求同时到达时，只允许其中一个真正建立会话，其余请求等待
+        同一个就绪信号后再继续，避免出现“核心会话不可用”的裸失败。
+        """
         if self._client is not None:
             return
-        if self._task is None:
-            self._ready = asyncio.Event()
-            self._stop = asyncio.Event()
-            self._error = None
-            self._task = asyncio.create_task(self._session_task())
-            assert self._ready is not None
-            await self._ready.wait()
-            if self._client is None:
-                raise CoreUnavailableError("核心会话启动失败。") from self._error
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        async with self._lock:
+            if self._client is not None:
+                return
+            if self._task is None:
+                self._ready = asyncio.Event()
+                self._stop = asyncio.Event()
+                self._error = None
+                self._task = asyncio.create_task(self._session_task())
+            ready = self._ready
+        assert ready is not None
+        await ready.wait()
+        if self._client is None:
+            raise CoreUnavailableError("核心会话启动失败。") from self._error
 
     async def call_tool(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         if self._client is None:
@@ -143,7 +168,11 @@ class _SessionCore:
         if client is None:
             raise CoreUnavailableError("核心会话不可用。")
         try:
-            result = await client.call_tool(name, dict(arguments))
+            result = await _await_with_timeout(
+                client.call_tool(name, dict(arguments)), self._timeout_seconds, name,
+            )
+        except CoreUnavailableError:
+            raise
         except Exception as exc:
             LOGGER.error("core tool call failed tool=%s error_type=%s", name, type(exc).__name__)
             raise CoreUnavailableError(f"核心调用失败：{name}") from exc
@@ -155,6 +184,7 @@ class _SessionCore:
         task = self._task
         self._task = None
         self._client = None
+        self._lock = None
         if task is None:
             return
         assert self._stop is not None
@@ -168,8 +198,15 @@ class _SessionCore:
 class StdioCore(_SessionCore):
     """独立核心进程：通过 STDIO 通信，核心可单独升级。"""
 
-    def __init__(self, command: str, args: tuple[str, ...] = (), env: Mapping[str, str] | None = None) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        command: str,
+        args: tuple[str, ...] = (),
+        env: Mapping[str, str] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> None:
+        super().__init__(timeout_seconds=timeout_seconds)
         self._command = command
         self._args = tuple(args)
         self._env = dict(env) if env else None
@@ -185,8 +222,14 @@ class StdioCore(_SessionCore):
 class HttpCore(_SessionCore):
     """内网独立核心：通过 Streamable HTTP 通信，核心可单独部署升级。"""
 
-    def __init__(self, url: str, token: str | None = None) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        url: str,
+        token: str | None = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> None:
+        super().__init__(timeout_seconds=timeout_seconds)
         self._url = url
         self._token = token
 
@@ -214,12 +257,13 @@ def _create_http_client(headers: dict[str, str] | None) -> Any:
 def build_core(config: CoreConfig) -> CoreClient:
     """按配置创建核心客户端。"""
     config.validate()
+    timeout = config.timeout_seconds
     if config.mode == "embedded":
-        return EmbeddedCore()
+        return EmbeddedCore(timeout_seconds=timeout)
     if config.mode == "stdio":
         assert config.target is not None
-        return StdioCore(config.target, config.args, config.env)
+        return StdioCore(config.target, config.args, config.env, timeout_seconds=timeout)
     if config.mode == "http":
         assert config.target is not None
-        return HttpCore(config.target, config.token)
+        return HttpCore(config.target, config.token, timeout_seconds=timeout)
     raise BridgeConfigError(f"未知的核心模式：{config.mode}")

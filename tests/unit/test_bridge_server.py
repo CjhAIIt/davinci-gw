@@ -10,7 +10,37 @@ from mcp import Client
 
 from davinci_gw.bridge.config import BridgeConfig, CoreConfig
 from davinci_gw.bridge.core import CoreUnavailableError
-from davinci_gw.bridge.server import build_bridge_server
+from davinci_gw.bridge.auth import BearerTokenMiddleware
+from davinci_gw.bridge.server import build_bridge_app, build_bridge_server
+
+
+class _PassthroughApp:
+    """只回 200 的占位下游应用，用于单独验证鉴权中间件。"""
+
+    async def __call__(self, scope, receive, send) -> None:
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [(b"content-length", b"0")],
+        })
+        await send({"type": "http.response.body", "body": b""})
+
+
+async def _status_for(app, authorization: str) -> int:
+    """带指定 Authorization 头调用一次应用，返回状态码。"""
+    sent: list[dict[str, Any]] = []
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    headers = []
+    if authorization:
+        headers.append((b"authorization", authorization.encode("latin-1")))
+    await app({"type": "http", "method": "POST", "path": "/mcp", "headers": headers}, receive, send)
+    return int(sent[0]["status"])
 
 
 def _envelope(tool: str, **payload: Any) -> dict[str, Any]:
@@ -124,3 +154,23 @@ def test_core_failure_becomes_a_controlled_envelope() -> None:
     assert payload["status"] == "INTERNAL_FAILURE"
     assert payload["success"] is False
     assert payload["issues"][0]["code"] == "BRIDGE_CORE_UNAVAILABLE"
+
+
+def test_authentication_token_equals_the_discovery_descriptor_token() -> None:
+    """发现文件里的令牌必须与鉴权使用的令牌逐字一致，否则客户端一律 401。"""
+    config = BridgeConfig(core=CoreConfig(mode="embedded"))
+    app = build_bridge_app(_RecordingCore(), config=config)
+    assert app.expected_token == config.effective_token
+
+
+def test_bearer_middleware_accepts_the_discovery_token_only() -> None:
+    """带正确令牌放行，缺少或错误令牌一律 401。"""
+    config = BridgeConfig(core=CoreConfig(mode="embedded"))
+
+    async def scenario() -> None:
+        app = BearerTokenMiddleware(_PassthroughApp(), config.effective_token)
+        assert await _status_for(app, f"Bearer {config.effective_token}") == 200
+        assert await _status_for(app, "Bearer wrong-token") == 401
+        assert await _status_for(app, "") == 401
+
+    asyncio.run(scenario())

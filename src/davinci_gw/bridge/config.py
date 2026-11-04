@@ -73,6 +73,16 @@ class BridgeConfig:
     descriptor_path: Path | None = None
     allow_remote: bool = False
 
+    def __post_init__(self) -> None:
+        """在构造时确定访问令牌。
+
+        令牌必须在整个进程生命周期内保持不变：客户端发现文件里的令牌
+        与服务端鉴权用的令牌必须逐字一致，否则调用会被判为 401。
+        因此这里一次性生成并固定，而不是每次读取时重新生成。
+        """
+        if not self.token:
+            object.__setattr__(self, "token", secrets.token_urlsafe(32))
+
     def validate(self) -> None:
         if not self.path.startswith("/"):
             raise BridgeConfigError("服务路径必须以 / 开头。")
@@ -84,8 +94,9 @@ class BridgeConfig:
 
     @property
     def effective_token(self) -> str:
-        """返回访问令牌；未显式配置时生成一次性随机值。"""
-        return self.token or secrets.token_urlsafe(32)
+        """返回本次启动确定的访问令牌；多次读取结果一致。"""
+        assert self.token is not None  # noqa: S101 - 由 __post_init__ 保证
+        return self.token
 
     def url_for(self, port: int | None = None) -> str:
         """返回客户端可用的服务地址。"""

@@ -276,6 +276,11 @@ class MainWindow(QMainWindow):
         buttons.addWidget(self.preview_button)
         buttons.addWidget(self.generate_button)
         layout.addLayout(buttons, 2, 1, 1, 2)
+        self.gate_hint = QLabel()
+        self.gate_hint.setObjectName("gateHint")
+        self.gate_hint.setWordWrap(True)
+        self.gate_hint.setVisible(False)
+        layout.addWidget(self.gate_hint, 3, 1, 1, 2)
         layout.setColumnStretch(1, 1)
         self._actions_card.body.addLayout(layout)
 
@@ -431,6 +436,9 @@ class MainWindow(QMainWindow):
         self.baseline_slot.clear_requested.connect(lambda: self.vm.set_baseline_path(""))
         self.config_slot.path_dropped.connect(self.vm.set_config_path)
         self.baseline_slot.path_dropped.connect(self.vm.set_baseline_path)
+        # 文件槽内层输入框自己也能接收拖放，必须单独接线，否则拖到输入框无效。
+        self.config_edit.path_dropped.connect(self.vm.set_config_path)
+        self.baseline_edit.path_dropped.connect(self.vm.set_baseline_path)
         self.config_edit.editingFinished.connect(lambda: self.vm.set_config_path(self.config_edit.text()))
         self.baseline_edit.editingFinished.connect(lambda: self.vm.set_baseline_path(self.baseline_edit.text()))
         self.output_edit.textEdited.connect(lambda text: self.vm.set_output_path(text, manual=True))
@@ -443,6 +451,7 @@ class MainWindow(QMainWindow):
         self.copy_issues_button.clicked.connect(self._copy_issues)
         self.ack_button.clicked.connect(self._acknowledge_visible)
         self.issue_table.doubleClicked.connect(self._show_issue_details)
+        self.issue_model.acknowledgement_changed.connect(self._sync_confirmation_state)
         self.layout_toggle.clicked.connect(self._toggle_layout)
         self.legacy_notice.back_button.clicked.connect(self._toggle_layout)
         self.demo_button.clicked.connect(self._load_demo)
@@ -467,6 +476,10 @@ class MainWindow(QMainWindow):
     def _issue_model_changed(self, issues) -> None:
         self.issue_model.set_issues(issues)
         self._refresh_filter_counts()
+
+    def _sync_confirmation_state(self) -> None:
+        """把待确认数量同步给 ViewModel，作为生成的唯一门禁。"""
+        self.vm.set_pending_confirmations(self.issue_model.pending_count())
 
     def _refresh_filter_counts(self) -> None:
         counts = {"ALL": self.issue_model.rowCount()}
@@ -553,7 +566,15 @@ class MainWindow(QMainWindow):
         self.output_edit.setEnabled(controls.inputs_enabled)
         self.output_button.setEnabled(controls.inputs_enabled)
         self.preview_button.setEnabled(controls.preview_enabled)
+        pending = self.issue_model.pending_count()
         self.generate_button.setEnabled(controls.generate_enabled)
+        self.generate_button.setToolTip(
+            f"还有 {pending} 项警告或保留决定未确认，确认后才能生成" if pending else ""
+        )
+        self.gate_hint.setText(
+            f"还有 {pending} 项警告或保留决定待确认，逐项确认后才能生成。" if pending else ""
+        )
+        self.gate_hint.setVisible(bool(pending))
         self.cancel_button.setEnabled(controls.cancel_enabled)
         tone, fallback_title = {
             GuiState.EMPTY: ("neutral", "等待输入"),
@@ -567,7 +588,6 @@ class MainWindow(QMainWindow):
             GuiState.CANCELLED: ("warning", "操作已取消"),
         }[self.vm.state]
         self.status_banner.set_state(tone)
-        pending = self.issue_model.pending_count()
         detail = self.vm.stage_name or fallback_title
         if pending:
             detail = f"{detail} · {pending} 项警告或保留决定待确认"

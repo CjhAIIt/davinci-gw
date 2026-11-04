@@ -38,6 +38,7 @@ from .workbook_schema import (
 )
 
 VERSION_PATTERN = re.compile(r"_v(\d+(?:\.\d+)*)\.xlsx$", re.IGNORECASE)
+VERSION_RANGE_PATTERN = re.compile(r"_v(\d+(?:\.\d+)*)-(\d+(?:\.\d+)*)\.xlsx$", re.IGNORECASE)
 MAX_CAN_ID = 0x1FFFFFFF
 
 
@@ -72,17 +73,38 @@ def _issue(
     )
 
 
+def _normalize_version(raw: str) -> str:
+    """把版本号各段规范化为整数形式，例如 04.083 变为 4.83。"""
+    return ".".join(str(int(part)) for part in raw.split("."))
+
+
 def parse_target_version(path: Path) -> tuple[str | None, ValidationIssue | None]:
-    """从大小写不敏感的 *_vX.x.xlsx 文件名解析并规范化版本。"""
+    """从大小写不敏感的 *_vX.x.xlsx 文件名解析并规范化版本。
+
+    兼容客户常见的版本区间命名（*_v4.83-4.85.xlsx）：取区间上限作为目标
+    版本，并给出需要人工确认的警告，避免把版本解释静默写进产物。
+    """
     match = VERSION_PATTERN.search(path.name)
-    if not match:
-        return None, ValidationIssue(
-            code="WORKBOOK_VERSION_MISSING",
-            message=f"配置表“{path}”无法从配置表文件名识别目标版本，请使用 *_vX.x.xlsx 格式。",
+    if match:
+        return _normalize_version(match.group(1)), None
+    range_match = VERSION_RANGE_PATTERN.search(path.name)
+    if range_match:
+        lower = _normalize_version(range_match.group(1))
+        upper = _normalize_version(range_match.group(2))
+        return upper, ValidationIssue(
+            code="WORKBOOK_VERSION_RANGE",
+            message=(
+                f"配置表“{path.name}”是版本区间文件（{lower} 至 {upper}），"
+                f"已按目标版本 {upper} 处理；如与本次目标版本不符，请改用 *_vX.x.xlsx 命名。"
+            ),
+            severity=ValidationSeverity.WARNING,
             file_path=path,
         )
-    version = ".".join(str(int(part)) for part in match.group(1).split("."))
-    return version, None
+    return None, ValidationIssue(
+        code="WORKBOOK_VERSION_MISSING",
+        message=f"配置表“{path}”无法从配置表文件名识别目标版本，请使用 *_vX.x.xlsx 格式。",
+        file_path=path,
+    )
 
 
 def _header_map(

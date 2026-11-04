@@ -35,9 +35,17 @@ class _FakeRunner(QObject):
         super().__init__()
         self.is_busy = False
         self.discarded: list[str] = []
+        self.commits: list[tuple[str, str, str]] = []
 
     def discard(self, session_id: str) -> None:
         self.discarded.append(session_id)
+
+    def start_preview(self, task_id: str, config_path: str, baseline_path: str,
+                      doip_missing_policy: str | None = None) -> None:
+        pass
+
+    def start_commit(self, task_id: str, session_id: str, output_path: str) -> None:
+        self.commits.append((task_id, session_id, output_path))
 
     def shutdown(self) -> None:
         self.stopped.emit()
@@ -266,6 +274,65 @@ def test_warning_and_decision_rows_can_be_acknowledged(qtbot) -> None:
     window._acknowledge_visible()
     assert model.pending_count() == 0
     assert "待确认" not in window.status_banner.title.text()
+
+
+def test_output_path_suggestion_is_skipped_without_a_baseline() -> None:
+    """没有基准文件时不得抛出异常，界面事件处理不能因此中断。"""
+    assert suggest_output_path("") == ""
+
+
+def test_generation_is_blocked_until_every_warning_is_acknowledged(qtbot, tmp_path: Path) -> None:
+    """人工确认是硬门禁：按钮与快捷键都不能绕过未确认的警告。"""
+    runner = _FakeRunner()
+    view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    output = tmp_path / "生成结果.arxml"
+    view_model.issues = issues_to_dto((ValidationIssue(
+        "PDUR_ROUTING_GROUP_NON_MAIN_MEMBER", "基线一致性警告", severity=ValidationSeverity.WARNING,
+    ),))
+    view_model.issues_changed.emit(view_model.issues)
+    view_model.state = GuiState.PREVIEW_VALID
+    view_model.session_id = "session-1"
+    view_model.output_path = str(output)
+    view_model.changed.emit()
+
+    assert view_model.pending_confirmations == 1
+    assert not window.generate_button.isEnabled()
+    assert "未确认" in window.generate_button.toolTip()
+
+    # 快捷键走的是同一个入口，同样被拦截。
+    view_model.start_generate()
+    assert runner.commits == []
+
+    # 勾选确认后立刻放行。
+    model = window.issue_model
+    model.setData(model.index(0, model.ACK_COLUMN), Qt.Checked, Qt.CheckStateRole)
+    assert view_model.pending_confirmations == 0
+    assert window.generate_button.isEnabled()
+
+    view_model.start_generate()
+    assert len(runner.commits) == 1
+    assert runner.commits[0][1] == "session-1"
+
+
+def test_dropping_a_file_on_the_path_input_fills_the_field(qtbot, tmp_path: Path) -> None:
+    """拖到文件槽内层输入框也必须生效，而不是只有拖到外框才生效。"""
+    runner = _FakeRunner()
+    view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    config = tmp_path / "网关配置.xlsx"
+    config.write_text("x", encoding="utf-8")
+    baseline = tmp_path / "基准.arxml"
+    baseline.write_text("x", encoding="utf-8")
+
+    window.config_edit.path_dropped.emit(str(config))
+    window.baseline_edit.path_dropped.emit(str(baseline))
+    assert view_model.config_path == str(Path(config))
+    assert view_model.baseline_path == str(Path(baseline))
 
 
 def test_severity_filter_pills_show_counts(qtbot) -> None:

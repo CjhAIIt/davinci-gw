@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt, Signal
 from PySide6.QtGui import QBrush, QColor
 
 from davinci_gw.contracts import IssueDto
@@ -22,6 +22,9 @@ class IssueTableModel(QAbstractTableModel):
     ACK_COLUMN = 7
     ACK_SEVERITIES = ("WARNING", "DECISION")
 
+    acknowledgement_changed = Signal()
+    """人工确认状态变化时发出；界面据此更新生成门禁。"""
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._issues: tuple[IssueDto, ...] = ()
@@ -32,6 +35,7 @@ class IssueTableModel(QAbstractTableModel):
         self._issues = issues
         self._acknowledged.clear()
         self.endResetModel()
+        self.acknowledgement_changed.emit()
 
     def rowCount(self, parent=QModelIndex()) -> int:  # noqa: N802
         return 0 if parent.isValid() else len(self._issues)
@@ -70,6 +74,7 @@ class IssueTableModel(QAbstractTableModel):
             top = self.index(0, self.ACK_COLUMN)
             bottom = self.index(len(self._issues) - 1, self.ACK_COLUMN)
             self.dataChanged.emit(top, bottom)
+            self.acknowledgement_changed.emit()
         return changed
 
     def pending_count(self, rows=None) -> int:
@@ -167,6 +172,7 @@ class IssueTableModel(QAbstractTableModel):
             else:
                 self._acknowledged.discard(index.row())
             self.dataChanged.emit(index, index)
+            self.acknowledgement_changed.emit()
             return True
         return False
 
