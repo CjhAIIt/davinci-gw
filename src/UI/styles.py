@@ -238,6 +238,20 @@ QLabel#softChip {{
     font-size: 11px;
     font-weight: 600;
 }}
+QFrame#softChip {{
+    background: {c['chip_bg']};
+    border: 1px solid {c['border']};
+    border-radius: 7px;
+}}
+QLabel#softChipText {{
+    background: transparent;
+    color: {c['text_muted']};
+    font-size: 11px;
+    font-weight: 600;
+}}
+QLabel#sectionIcon {{
+    background: transparent;
+}}
 QFrame#headerDivider {{
     background: {c['border']};
 }}

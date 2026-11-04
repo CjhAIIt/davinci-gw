@@ -57,8 +57,9 @@ LAYOUT_BENTO = "bento"
 LAYOUT_LEGACY = "legacy"
 
 SIDEBAR_WIDTH = 470
-ISSUE_ROW_HEIGHT = 68
+ISSUE_ROW_HEIGHT = 108
 ISSUE_MAX_VISIBLE_ROWS = 8
+AUTOSAR_VERSION = "AUTOSAR R4.2.2"
 
 
 class MainWindow(QMainWindow):
@@ -231,22 +232,26 @@ class MainWindow(QMainWindow):
         text_box.addWidget(subtitle)
         layout.addLayout(text_box, 1)
 
+        self.demo_button = QPushButton("重置演示数据")
+        self.demo_button.setObjectName("demoChip")
+        self.demo_button.setCursor(Qt.PointingHandCursor)
+        self.demo_button.setVisible(self._demo_files() is not None)
+        self.demo_button.setIcon(make_icon("bolt", "#2563eb", 15))
+        self.demo_button.setIconSize(QSize(15, 15))
+        self.demo_button.setToolTip("填入示例输入并重新预览")
+        layout.addWidget(self.demo_button, 0, Qt.AlignVCenter)
+
+        self.layout_toggle = QPushButton("双栏布局")
+        self.layout_toggle.setObjectName("chipButton")
+        self.layout_toggle.setCursor(Qt.PointingHandCursor)
+        self.layout_toggle.setToolTip("点击对比原版单栏长条布局")
+        layout.addWidget(self.layout_toggle, 0, Qt.AlignVCenter)
+
         divider = QFrame()
         divider.setObjectName("headerDivider")
         divider.setFixedWidth(1)
         divider.setFixedHeight(28)
         layout.addWidget(divider, 0, Qt.AlignVCenter)
-
-        self.demo_button = QPushButton("一键填入测试数据并预览")
-        self.demo_button.setObjectName("demoChip")
-        self.demo_button.setCursor(Qt.PointingHandCursor)
-        self.demo_button.setVisible(self._demo_files() is not None)
-        layout.addWidget(self.demo_button, 0, Qt.AlignVCenter)
-
-        self.layout_toggle = QPushButton("当前：双栏紧凑布局（点击对比原版长条）")
-        self.layout_toggle.setObjectName("chipButton")
-        self.layout_toggle.setCursor(Qt.PointingHandCursor)
-        layout.addWidget(self.layout_toggle, 0, Qt.AlignVCenter)
 
         self.theme_switch = ThemeSwitch(self._theme)
         layout.addWidget(self.theme_switch, 0, Qt.AlignVCenter)
@@ -264,7 +269,7 @@ class MainWindow(QMainWindow):
 
     def _build_input_card(self) -> None:
         self._input_card = SectionCard(
-            "选择输入文件", icon_kind="upload", inline_hint="支持拖入文件",
+            "选择输入文件", step="1", inline_hint="支持拖入文件", inline_icon="upload",
         )
         self.config_slot = FileSlot("标准配置表", ".xlsx")
         self.baseline_slot = FileSlot("基准 ARXML", ".arxml")
@@ -290,7 +295,7 @@ class MainWindow(QMainWindow):
 
     def _build_actions_card(self) -> None:
         self._actions_card = SectionCard(
-            "预览并生成", icon_kind="bolt", hint="先预览并确认，再生成新文件",
+            "预览并生成", step="2", hint="先预览并确认，再生成新文件",
         )
         layout = QVBoxLayout()
         layout.setSpacing(10)
@@ -372,7 +377,7 @@ class MainWindow(QMainWindow):
         self.check_group.body.addLayout(self.check_layout)
 
     def _build_feature_card(self) -> None:
-        self.feature_group = SectionCard("变更摘要", icon_kind="bolt")
+        self.feature_group = SectionCard("本次路由变更统计", icon_kind="pulse")
         self.feature_layout = QVBoxLayout()
         self.feature_layout.setSpacing(10)
         self.feature_group.body.addLayout(self.feature_layout)
@@ -390,9 +395,14 @@ class MainWindow(QMainWindow):
         toolbar.addStretch(1)
         self.search_edit = QLineEdit()
         self.search_edit.setObjectName("searchInput")
-        self.search_edit.setPlaceholderText("搜索代码、说明、位置或建议")
-        self.search_edit.setFixedWidth(240)
+        self.search_edit.setPlaceholderText("搜索代码、说明、位置或建议…")
+        self.search_edit.setFixedWidth(288)
+        self.search_icon_action = self.search_edit.addAction(
+            make_icon("search", "#94a3b8", 15), QLineEdit.ActionPosition.LeadingPosition,
+        )
+        self.search_icon_action.setToolTip("按代码、说明、位置或建议搜索")
         self.copy_issues_button = QPushButton("复制所选")
+        self.copy_issues_button.setObjectName("ghostButton")
         self.copy_issues_button.setCursor(Qt.PointingHandCursor)
         self.ack_button = QPushButton("批量确认")
         self.ack_button.setObjectName("ackBatchButton")
@@ -446,7 +456,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(18)
         self.operation_label = QLabel("操作 ID —")
         self.session_label = QLabel("会话 ID —")
-        self.version_label = QLabel(f"版本 {__version__}")
+        self.version_label = QLabel(f"版本 {__version__}（{AUTOSAR_VERSION}）")
         for label in (self.operation_label, self.session_label, self.version_label):
             label.setObjectName("telemetryText")
             label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -470,10 +480,9 @@ class MainWindow(QMainWindow):
         bento = mode == LAYOUT_BENTO
         left = self._left if bento else self._legacy
         right = self._right if bento else self._legacy
-        for widget in (self._input_card, self._actions_card, self.result_group):
+        for widget in (self._input_card, self._actions_card, self.result_group, self.feature_group):
             self._place(widget, left)
-        for widget in (self.status_banner, self.progress, self._issues_card, self.check_group,
-                       self.feature_group):
+        for widget in (self.status_banner, self.progress, self._issues_card, self.check_group):
             self._place(widget, right)
         if bento:
             self._left.addStretch(1)
@@ -489,8 +498,10 @@ class MainWindow(QMainWindow):
         self.progress.setVisible(self.vm.state in {GuiState.PREPARING, GuiState.GENERATING})
         self.legacy_notice.setVisible(not bento)
         self.layout_toggle.setText(
-            "当前：双栏紧凑布局（点击对比原版长条）" if bento
-            else "当前：原版单栏长条（点击回到双栏紧凑布局）"
+            "双栏布局" if bento else "单栏布局"
+        )
+        self.layout_toggle.setToolTip(
+            "点击对比原版单栏长条布局" if bento else "点击回到双栏紧凑布局"
         )
 
     # ------------------------------------------------------------------ 连接
@@ -522,6 +533,7 @@ class MainWindow(QMainWindow):
         self.search_edit.textChanged.connect(self.issue_proxy.set_search)
         self.search_edit.textChanged.connect(lambda _text: self._on_filter_changed())
         self.copy_issues_button.clicked.connect(self._copy_issues)
+        self.issue_table.selectionModel().selectionChanged.connect(self._sync_selection_state)
         self.ack_button.clicked.connect(self._acknowledge_visible)
         self.issue_table.doubleClicked.connect(self._show_issue_details)
         self.issue_model.acknowledgement_changed.connect(self._sync_confirmation_state)
@@ -662,20 +674,19 @@ class MainWindow(QMainWindow):
         )
         self.gate_hint.setVisible(bool(pending))
         self.cancel_button.setEnabled(controls.cancel_enabled)
-        tone, fallback_title = {
-            GuiState.EMPTY: ("neutral", "等待输入"),
-            GuiState.READY: ("info", "输入就绪"),
-            GuiState.PREPARING: ("info", "正在预览"),
-            GuiState.PREVIEW_VALID: ("success", "预览通过"),
-            GuiState.PREVIEW_INVALID: ("warning", "预览未通过"),
-            GuiState.GENERATING: ("info", "正在生成"),
-            GuiState.SUCCESS: ("success", "生成成功"),
-            GuiState.FAILED: ("error", "操作失败"),
-            GuiState.CANCELLED: ("warning", "操作已取消"),
+        tone = {
+            GuiState.EMPTY: "neutral",
+            GuiState.READY: "info",
+            GuiState.PREPARING: "info",
+            GuiState.PREVIEW_VALID: "success",
+            GuiState.PREVIEW_INVALID: "warning",
+            GuiState.GENERATING: "info",
+            GuiState.SUCCESS: "success",
+            GuiState.FAILED: "error",
+            GuiState.CANCELLED: "warning",
         }[self.vm.state]
         self.status_banner.set_state(tone)
-        title = self.vm.stage_name or fallback_title
-        detail = f"{pending} 项警告或保留决定待确认" if pending else ""
+        title, detail = self._banner_text(pending)
         self.status_banner.set_message(title, detail)
         self.status_banner.set_step(self._pipeline_step(), 3)
         self.progress.setValue(self.vm.progress_percent)
@@ -689,9 +700,27 @@ class MainWindow(QMainWindow):
         has_issues = self.issue_model.rowCount() > 0
         self.issue_table.setVisible(has_issues)
         self.issue_empty.setVisible(not has_issues)
-        self.copy_issues_button.setEnabled(has_issues)
-        self.ack_button.setEnabled(has_issues)
+        self.copy_issues_button.setEnabled(
+            has_issues and bool(self.issue_table.selectionModel().selectedRows())
+        )
+        self.ack_button.setEnabled(has_issues and pending > 0)
         self._refresh_filter_counts()
+        self.feature_group.status_chip_label.setText(
+            "校验通过" if self.vm.state is GuiState.PREVIEW_VALID else ""
+        )
+        self.feature_group.status_chip_label.setVisible(
+            self.vm.state is GuiState.PREVIEW_VALID and bool(self.vm.features)
+        )
+
+    def _banner_text(self, pending: int) -> tuple[str, str]:
+        """状态条文案：标题说明当前能做什么，副文案给出下一步指引。"""
+        if self.vm.state is GuiState.PREVIEW_VALID:
+            if pending:
+                return ("预览通过，可以生成", f"{pending} 项警告或保留决定待确认")
+            return ("所有校验项已确认，可生成 ARXML", "点击左侧「生成 ARXML」输出最终工程文件")
+        if self.vm.state is GuiState.PREVIEW_INVALID:
+            return (self.vm.stage_name or "预览未通过", "请按问题清单修正后重新预览")
+        return (self.vm.stage_name or "等待输入", "")
 
     def _pipeline_step(self) -> int:
         """当前处于流程的第几步。"""
@@ -800,6 +829,11 @@ class MainWindow(QMainWindow):
         if text:
             QApplication.clipboard().setText(text)
 
+    def _sync_selection_state(self, *_args) -> None:
+        """没有选中行时禁用「复制所选」，与参考图的灰色按钮一致。"""
+        selected = bool(self.issue_table.selectionModel().selectedRows())
+        self.copy_issues_button.setEnabled(selected)
+
     def _refresh_icons(self) -> None:
         """按当前主题刷新按钮图标。"""
         colors = THEMES.get(self._theme, THEMES["light"])
@@ -810,6 +844,7 @@ class MainWindow(QMainWindow):
         for button in (self.preview_button, self.generate_button, self.output_button,
                        self.open_folder_button):
             button.setIconSize(QSize(16, 16))
+        self.search_icon_action.setIcon(make_icon("search", colors["text_faint"], 15))
 
     def _apply_theme(self, theme: str) -> None:
         """切换白天 / 夜间主题，并记住用户的选择。"""

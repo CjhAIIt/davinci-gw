@@ -302,6 +302,7 @@ class SectionCard(QFrame):
         hint: str = "",
         hint_badge: str = "",
         inline_hint: str = "",
+        inline_icon: str | None = None,
         status_chip: str = "",
         parent=None,
     ) -> None:
@@ -317,28 +318,40 @@ class SectionCard(QFrame):
             header.addWidget(StepBadge(step))
         elif icon_kind:
             icon_lbl = QLabel()
+            icon_lbl.setObjectName("sectionIcon")
             icon_lbl.setPixmap(make_icon(icon_kind, "#2563eb", 16).pixmap(QSize(16, 16)))
-            header.addWidget(icon_lbl)
+            header.addWidget(icon_lbl, 0, Qt.AlignVCenter)
         title_label = QLabel(title)
         title_label.setObjectName("sectionTitle")
         header.addWidget(title_label)
         if inline_hint:
-            inline_label = QLabel(inline_hint)
-            inline_label.setObjectName("sectionHint")
-            header.addWidget(inline_label)
+            # 说明标签用胶囊呈现，和右侧纯文字说明区分开。
+            chip = QFrame()
+            chip.setObjectName("softChip")
+            chip_layout = QHBoxLayout(chip)
+            chip_layout.setContentsMargins(8, 3, 9, 3)
+            chip_layout.setSpacing(5)
+            if inline_icon:
+                chip_icon = QLabel()
+                chip_icon.setPixmap(make_icon(inline_icon, "#64748b", 13).pixmap(QSize(13, 13)))
+                chip_layout.addWidget(chip_icon, 0, Qt.AlignVCenter)
+            chip_label = QLabel(inline_hint)
+            chip_label.setObjectName("softChipText")
+            chip_layout.addWidget(chip_label)
+            header.addWidget(chip, 0, Qt.AlignVCenter)
         header.addStretch(1)
         if hint_badge:
             badge_label = QLabel(hint_badge)
             badge_label.setObjectName("sectionHintBadge")
-            header.addWidget(badge_label)
+            header.addWidget(badge_label, 0, Qt.AlignVCenter)
         elif hint:
             hint_label = QLabel(hint)
             hint_label.setObjectName("sectionHint")
-            header.addWidget(hint_label)
+            header.addWidget(hint_label, 0, Qt.AlignVCenter)
         self.status_chip_label = QLabel(status_chip)
         self.status_chip_label.setObjectName("readyChip")
         self.status_chip_label.setVisible(bool(status_chip))
-        header.addWidget(self.status_chip_label)
+        header.addWidget(self.status_chip_label, 0, Qt.AlignVCenter)
         outer.addLayout(header)
 
         self.body = QVBoxLayout()

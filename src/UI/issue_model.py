@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import (
     QAbstractTableModel,
     QEvent,
@@ -111,9 +113,12 @@ class IssueTableModel(QAbstractTableModel):
             parts.append(f"第 {issue.row_number} 行")
         if issue.field_name:
             parts.append(issue.field_name)
-        if not parts and issue.file_path:
-            parts.append(issue.file_path)
-        return " / ".join(parts) or "—"
+        if parts:
+            return " / ".join(parts)
+        if issue.file_path:
+            # 只显示文件名，完整路径由双击详情弹窗给出，避免整条绝对路径占满整列。
+            return Path(issue.file_path).name
+        return "—"
 
     @staticmethod
     def _advice(issue: IssueDto) -> str:
@@ -273,7 +278,39 @@ class IssueTableDelegate(QStyledItemDelegate):
 
     def sizeHint(self, option, index) -> QSize:  # noqa: N802
         base = super().sizeHint(option, index)
-        return QSize(base.width(), 68)
+        return QSize(base.width(), 108)
+
+    @staticmethod
+    def _draw_wrapped(painter: QPainter, text: str, rect: QRectF, max_lines: int) -> None:
+        """在限定行数内绘制换行文本，超出的部分用省略号收尾。"""
+        if not text:
+            return
+        fm = painter.fontMetrics()
+        width = max(1.0, rect.width())
+        lines: list[str] = []
+        current = ""
+        current_width = 0.0
+        for char in text:
+            char_width = fm.horizontalAdvance(char)
+            if current and current_width + char_width > width:
+                lines.append(current)
+                current = ""
+                current_width = 0.0
+                if len(lines) == max_lines:
+                    break
+            current += char
+            current_width += char_width
+        if current and len(lines) < max_lines:
+            lines.append(current)
+        if len(lines) == max_lines and len("".join(lines)) < len(text):
+            lines[-1] = fm.elidedText(lines[-1] + "…", Qt.ElideRight, int(width))
+        line_height = fm.lineSpacing()
+        for idx, line in enumerate(lines):
+            painter.drawText(
+                QRectF(rect.left(), rect.top() + idx * line_height, rect.width(), line_height),
+                Qt.AlignLeft | Qt.AlignVCenter,
+                line,
+            )
 
     @staticmethod
     def _source_row_and_model(index) -> tuple[int, IssueTableModel | None]:
@@ -376,15 +413,16 @@ class IssueTableDelegate(QStyledItemDelegate):
                 painter.drawText(sub_rect, Qt.AlignLeft | Qt.AlignVCenter, sub_elided)
 
         elif col == 4:
-            # 双行：第一行粗体问题描述，第二行柔和工程建议
+            # 双行：第一行粗体问题描述（可换行两行），第二行柔和工程建议（可换行两行）
             title_font = QFont(option.font)
             title_font.setPixelSize(13)
             title_font.setBold(True)
             painter.setFont(title_font)
             painter.setPen(QColor(c["text"]))
-            top_rect = QRectF(rect.left() + 10, rect.top() + 11, rect.width() - 20, 20)
-            top_text = painter.fontMetrics().elidedText(issue.message, Qt.ElideRight, int(top_rect.width()))
-            painter.drawText(top_rect, Qt.AlignLeft | Qt.AlignVCenter, top_text)
+            self._draw_wrapped(
+                painter, issue.message,
+                QRectF(rect.left() + 10, rect.top() + 8, rect.width() - 20, 38), 2,
+            )
 
             advice_font = QFont(option.font)
             advice_font.setPixelSize(12)
@@ -394,9 +432,10 @@ class IssueTableDelegate(QStyledItemDelegate):
             can_id = model._messages(issue, "can_id")
             if can_id != "—":
                 advice = f"{advice}（{can_id}）"
-            bot_rect = QRectF(rect.left() + 10, rect.top() + 34, rect.width() - 20, 22)
-            bot_text = painter.fontMetrics().elidedText(advice, Qt.ElideRight, int(bot_rect.width()))
-            painter.drawText(bot_rect, Qt.AlignLeft | Qt.AlignVCenter, bot_text)
+            self._draw_wrapped(
+                painter, advice,
+                QRectF(rect.left() + 10, rect.top() + 50, rect.width() - 20, 50), 3,
+            )
 
         elif col == 5:
             # ARXML 节点 / 矩阵位置
