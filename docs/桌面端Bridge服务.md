@@ -47,8 +47,9 @@ python -m davinci_gw.bridge --core http --core-target http://127.0.0.1:9100/mcp 
 | `--core-target` | `stdio` 模式为可执行文件路径；`http` 模式为 MCP 端点 URL |
 | `--core-arg` | 追加的核心参数；参数以 `-` 开头时使用 `--core-arg=-m` 形式 |
 | `--core-token` | `http` 模式访问核心所需的令牌 |
+| `--core-timeout` | 单次核心调用的超时秒数，缺省 3600；超时按核心不可用处理 |
 | `--host` / `--port` / `--path` | 监听地址、端口（`0` 表示系统分配）、端点路径 |
-| `--token` | 桥接访问令牌；缺省时随机生成 |
+| `--token` | 桥接访问令牌；缺省时在启动时随机生成一次 |
 | `--descriptor` | 客户端发现文件路径，缺省为 `%LOCALAPPDATA%\DaVinciGW\bridge.json` |
 | `--no-descriptor` | 不写发现文件 |
 | `--allow-remote` | 允许非回环监听；必须显式开启 |
@@ -64,7 +65,7 @@ python -m davinci_gw.bridge --core http --core-target http://127.0.0.1:9100/mcp 
 {
   "schema_version": "1.0",
   "name": "davinci-gw-bridge",
-  "version": "1.3.1",
+  "version": "1.3.3",
   "pid": 1234,
   "host": "127.0.0.1",
   "port": 8765,
@@ -77,6 +78,8 @@ python -m davinci_gw.bridge --core http --core-target http://127.0.0.1:9100/mcp 
 ```
 
 文件含明文令牌，只应由当前用户可读；不需要客户端发现时可加 `--no-descriptor`。
+
+令牌在**进程启动时确定一次**：缺省时随机生成，并在整个进程生命周期内保持不变。发现文件里的 `token` 与服务端鉴权使用的是同一个值，客户端直接读取该字段即可，不会出现“发现文件与实际校验令牌不一致”导致的 401。
 
 ## 对外工具
 
