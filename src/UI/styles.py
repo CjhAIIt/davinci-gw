@@ -416,17 +416,6 @@ QLabel#fieldHint {{
     line-height: 1.45;
 }}
 
-/* ---------- 原版模式提示 ---------- */
-QFrame#legacyNotice {{
-    background: {c['danger_soft']};
-    border: 1px solid {c['danger_border']};
-    border-radius: 10px;
-}}
-QLabel#legacyNoticeText {{
-    color: {c['danger_text']};
-    font-size: 12px;
-}}
-
 /* ---------- 问题列表容器 ---------- */
 QFrame#issueListFrame {{
     background: {c['surface']};

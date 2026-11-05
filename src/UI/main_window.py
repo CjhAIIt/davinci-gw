@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QScrollArea,
     QSizePolicy,
-    QStackedWidget,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -39,7 +38,6 @@ from .components import (
     FileSlot,
     GridCanvasWidget,
     InfoIconWidget,
-    LegacyNotice,
     SectionCard,
     SegmentedFilter,
     StatusBanner,
@@ -54,7 +52,6 @@ from .styles import THEMES, apply_theme, detect_system_theme
 from .view_model import GatewayViewModel
 
 LAYOUT_BENTO = "bento"
-LAYOUT_LEGACY = "legacy"
 
 SIDEBAR_WIDTH = 470
 ISSUE_ROW_HEIGHT = 108
@@ -105,11 +102,7 @@ class MainWindow(QMainWindow):
 
         shell_layout.addWidget(self._build_header())
 
-        self._mode_stack = QStackedWidget()
-        self._mode_stack.setObjectName("bentoColumn")
-        shell_layout.addWidget(self._mode_stack, 1)
-
-        # 新版：左侧输入侧栏 + 右侧校验工作台。
+        # 左侧输入侧栏 + 右侧校验工作台。
         bento_host = QWidget()
         bento_host.setObjectName("bentoColumn")
         bento = QHBoxLayout(bento_host)
@@ -151,30 +144,7 @@ class MainWindow(QMainWindow):
         self.page_scroll.setWidget(self._right_host)
         area_layout.addWidget(self.page_scroll)
         bento.addWidget(self._right_area, 1)
-        self._mode_stack.addWidget(bento_host)
-
-        # 原版：单栏长条布局，用于对比查看。
-        legacy_host = QWidget()
-        legacy_host.setObjectName("bentoColumn")
-        legacy_area = QVBoxLayout(legacy_host)
-        legacy_area.setContentsMargins(0, 0, 0, 0)
-        legacy_area.setSpacing(0)
-        self.legacy_scroll = QScrollArea()
-        self.legacy_scroll.setObjectName("pageScroll")
-        self.legacy_scroll.setWidgetResizable(True)
-        self.legacy_scroll.setFrameShape(QFrame.NoFrame)
-        self._legacy_host = QWidget()
-        self._legacy_host.setObjectName("bentoLeft")
-        self._legacy = QVBoxLayout(self._legacy_host)
-        self._legacy.setContentsMargins(24, 18, 24, 18)
-        self._legacy.setSpacing(14)
-        self.legacy_scroll.setWidget(self._legacy_host)
-        legacy_area.addWidget(self.legacy_scroll)
-        self._mode_stack.addWidget(legacy_host)
-
-        self.legacy_notice = LegacyNotice()
-        self.legacy_notice.setVisible(False)
-        self._legacy.insertWidget(0, self.legacy_notice)
+        shell_layout.addWidget(bento_host, 1)
 
         self.status_banner = StatusBanner()
         self.progress = QProgressBar()
@@ -240,12 +210,6 @@ class MainWindow(QMainWindow):
         self.demo_button.setIconSize(QSize(15, 15))
         self.demo_button.setToolTip("填入示例输入并重新预览")
         layout.addWidget(self.demo_button, 0, Qt.AlignVCenter)
-
-        self.layout_toggle = QPushButton("双栏布局")
-        self.layout_toggle.setObjectName("chipButton")
-        self.layout_toggle.setCursor(Qt.PointingHandCursor)
-        self.layout_toggle.setToolTip("点击对比原版单栏长条布局")
-        layout.addWidget(self.layout_toggle, 0, Qt.AlignVCenter)
 
         divider = QFrame()
         divider.setObjectName("headerDivider")
@@ -476,33 +440,19 @@ class MainWindow(QMainWindow):
         widget.show()
 
     def _set_layout_mode(self, mode: str) -> None:
-        """切换双栏紧凑布局与原版单栏长条布局。"""
-        bento = mode == LAYOUT_BENTO
-        left = self._left if bento else self._legacy
-        right = self._right if bento else self._legacy
+        """把共享卡片放入左右双栏布局。"""
         for widget in (self._input_card, self._actions_card, self.result_group, self.feature_group):
-            self._place(widget, left)
+            self._place(widget, self._left)
         for widget in (self.status_banner, self.progress, self._issues_card, self.check_group):
-            self._place(widget, right)
-        if bento:
-            self._left.addStretch(1)
-            self._right.addStretch(1)
-        else:
-            self._legacy.addStretch(1)
-        self._mode_stack.setCurrentIndex(0 if bento else 1)
+            self._place(widget, self._right)
+        self._left.addStretch(1)
+        self._right.addStretch(1)
         self._layout_mode = mode
-        # 换布局会重新挂载卡片，这里恢复由业务状态决定的显隐，避免空卡片与残留进度条。
+        # 布局切换会重新挂载卡片，这里恢复由业务状态决定的显隐，避免空卡片与残留进度条。
         self.result_group.setVisible(bool(self.vm.artifact_path))
         self.check_group.setVisible(bool(self.vm.input_files or self.vm.target_version or self.vm.checks))
         self.feature_group.setVisible(bool(self.vm.features))
         self.progress.setVisible(self.vm.state in {GuiState.PREPARING, GuiState.GENERATING})
-        self.legacy_notice.setVisible(not bento)
-        self.layout_toggle.setText(
-            "双栏布局" if bento else "单栏布局"
-        )
-        self.layout_toggle.setToolTip(
-            "点击对比原版单栏长条布局" if bento else "点击回到双栏紧凑布局"
-        )
 
     # ------------------------------------------------------------------ 连接
 
@@ -537,17 +487,12 @@ class MainWindow(QMainWindow):
         self.ack_button.clicked.connect(self._acknowledge_visible)
         self.issue_table.doubleClicked.connect(self._show_issue_details)
         self.issue_model.acknowledgement_changed.connect(self._sync_confirmation_state)
-        self.layout_toggle.clicked.connect(self._toggle_layout)
-        self.legacy_notice.back_button.clicked.connect(self._toggle_layout)
         self.demo_button.clicked.connect(self._load_demo)
         self.theme_switch.theme_changed.connect(self._apply_theme)
         self.open_folder_button.clicked.connect(self._open_artifact_folder)
         self.copy_path_button.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.vm.artifact_path))
         self.open_log_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_path().parent))))
         self._refresh_icons()
-
-    def _toggle_layout(self) -> None:
-        self._set_layout_mode(LAYOUT_LEGACY if self._layout_mode == LAYOUT_BENTO else LAYOUT_BENTO)
 
     def _load_demo(self) -> None:
         """开发环境下填入示例输入并立即预览。"""

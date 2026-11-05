@@ -220,27 +220,18 @@ def test_theme_switch_changes_stylesheet_and_remembers_choice(qtbot, tmp_path: P
         QSettings.setDefaultFormat(original_format)
 
 
-def test_layout_switch_moves_cards_between_bento_and_legacy(qtbot) -> None:
-    """双栏与原版单栏切换时，卡片在两套布局之间搬家且不丢失。"""
+def test_cards_are_placed_in_the_two_column_workbench(qtbot) -> None:
+    """界面只保留双栏布局：输入卡片在左栏，工作台卡片在右栏。"""
     runner = _FakeRunner()
     view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
     window = MainWindow(view_model)
     qtbot.addWidget(window)
 
     assert window._layout_mode == "bento"
-    assert window.legacy_notice.isHidden() is True
-
-    window._toggle_layout()
-    assert window._layout_mode == "legacy"
-    assert window.legacy_notice.isHidden() is False
-    assert window._input_card.parentWidget() is window._legacy_host
-    assert window._issues_card.parentWidget() is window._legacy_host
-
-    window._toggle_layout()
-    assert window._layout_mode == "bento"
-    assert window.legacy_notice.isHidden() is True
     assert window._input_card.parentWidget() is window._left_host
+    assert window._actions_card.parentWidget() is window._left_host
     assert window._issues_card.parentWidget() is window._right_host
+    assert window.status_banner.parentWidget() is window._right_host
 
 
 def test_warning_and_decision_rows_can_be_acknowledged(qtbot) -> None:
@@ -294,14 +285,13 @@ def test_issue_table_uses_the_custom_delegate_and_folded_columns(qtbot) -> None:
     assert not window.issue_table.isColumnHidden(4)
 
 
-def test_switching_layout_keeps_empty_cards_hidden(qtbot) -> None:
-    """切换到原版单栏模式时，空的生成结果与进度条不能被重新显示。"""
+def test_empty_cards_stay_hidden(qtbot) -> None:
+    """没有结果时，生成结果卡片与进度条保持隐藏。"""
     runner = _FakeRunner()
     view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
     window = MainWindow(view_model)
     qtbot.addWidget(window)
 
-    window._toggle_layout()
     assert not window.result_group.isVisible()
     assert not window.progress.isVisible()
     assert not window.feature_group.isVisible()

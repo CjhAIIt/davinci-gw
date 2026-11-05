@@ -520,27 +520,6 @@ class FileSlot(QFrame):
         event.acceptProposedAction()
 
 
-class LegacyNotice(QFrame):
-    """原版单栏长条模式的对比提示条。"""
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setObjectName("legacyNotice")
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 9, 14, 9)
-        layout.setSpacing(10)
-        text = QLabel(
-            "正在演示【原版单列长条模式】：注意观察下方输入框与搜索框被拉长到整个屏幕宽度，"
-            "眼动跨度极大，且下方校验区被严重挤压。"
-        )
-        text.setObjectName("legacyNoticeText")
-        text.setWordWrap(True)
-        layout.addWidget(text, 1)
-        self.back_button = QPushButton("切回双栏紧凑布局")
-        self.back_button.setObjectName("linkButton")
-        layout.addWidget(self.back_button, 0, Qt.AlignVCenter)
-
-
 class StatusDot(QWidget):
     """筛选胶囊内的小彩色圆点。"""
 

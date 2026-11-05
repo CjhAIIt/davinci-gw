@@ -43,6 +43,34 @@ async def _status_for(app, authorization: str) -> int:
     return int(sent[0]["status"])
 
 
+def test_rejection_drains_the_request_body_before_responding() -> None:
+    """鉴权失败时必须先读完请求体再回 401。
+
+    否则客户端还在发送 body 时服务端就关闭连接，Windows 会用 RST 中断连接，
+    调用方收到的是连接错误而不是 401。
+    """
+    middleware = BearerTokenMiddleware(_PassthroughApp(), "secret")
+    sent: list[dict[str, Any]] = []
+    chunks = [
+        {"type": "http.request", "body": b"part-1", "more_body": True},
+        {"type": "http.request", "body": b"part-2", "more_body": False},
+    ]
+
+    async def receive() -> dict[str, Any]:
+        return chunks.pop(0)
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    async def scenario() -> None:
+        await middleware({"type": "http", "method": "POST", "path": "/mcp", "headers": []}, receive, send)
+
+    asyncio.run(scenario())
+    assert sent[0]["status"] == 401
+    # 请求体必须已被读完，否则调用方的连接会被中断。
+    assert chunks == []
+
+
 def _envelope(tool: str, **payload: Any) -> dict[str, Any]:
     return {
         "schema_version": "1.0",

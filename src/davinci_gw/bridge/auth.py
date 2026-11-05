@@ -32,7 +32,7 @@ class BearerTokenMiddleware:
             await self._app(scope, receive, send)
             return
         if not self._authorized(scope.get("headers") or []):
-            await self._reject(send)
+            await self._reject(receive, send)
             return
         await self._app(scope, receive, send)
 
@@ -46,7 +46,10 @@ class BearerTokenMiddleware:
             return hmac.compare_digest(value.strip(), self._token)
         return False
 
-    async def _reject(self, send: Send) -> None:
+    async def _reject(self, receive: Receive, send: Send) -> None:
+        # 先排空请求体再回应：否则客户端还在发送 body 时服务端就关闭连接，
+        # Windows 会用 RST 中断连接，调用方收到的是连接错误而不是 401。
+        await self._drain_body(receive)
         body = b'{"error":"unauthorized"}'
         await send({
             "type": "http.response.start",
@@ -58,3 +61,17 @@ class BearerTokenMiddleware:
             ],
         })
         await send({"type": "http.response.body", "body": body})
+
+    @staticmethod
+    async def _drain_body(receive: Receive) -> None:
+        """读取并丢弃请求体，最多处理 1 MiB，避免异常客户端无限占用内存。"""
+        limit = 1 << 20
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                return
+            limit -= len(message.get("body", b""))
+            if not message.get("more_body", False):
+                return
+            if limit <= 0:
+                return
