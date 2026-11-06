@@ -56,6 +56,7 @@ python -m davinci_gw.bridge --core http --core-target http://127.0.0.1:9100/mcp 
 | `--tls-certfile` / `--tls-keyfile` | 对外监听时的 TLS 证书与私钥路径；两者必须同时提供 |
 | `--allow-remote-insecure` | 对外监听时不启用 TLS；仅在端口已置于受信加密隧道之后时使用 |
 | `--allowed-host` | 客户端实际使用的主机名或 IP，可重复；用于 Host 白名单 |
+| `--public-host` | 对外通告的客户端可达主机名或 IP；绑定全部接口时用它替代 `0.0.0.0` |
 | `--log-level` | 日志级别 |
 
 ### 对外监听必须加密
@@ -87,6 +88,23 @@ python -m davinci_gw.bridge --core embedded --host 0.0.0.0 --allow-remote `
 绑定到全部接口且没有登记任何主机名时，Host 白名单无从枚举，桥接会**关闭
 Host 校验**并在日志中给出警告：此时访问控制完全由 Bearer 令牌与传输加密
 承担。登记了主机名则照常开启校验。
+
+### 对外通告的地址
+
+`--host 0.0.0.0` 是监听地址，不是客户端能连接的地址：把它写进发现文件
+和能力接口，客户端会连到"未指定地址"上去。绑定全部接口时用
+`--public-host` 指定客户端实际可达的主机名或 IP：
+
+```powershell
+python -m davinci_gw.bridge --core embedded --host 0.0.0.0 --allow-remote `
+  --tls-certfile C:\certs\bridge.crt --tls-keyfile C:\certs\bridge.key `
+  --public-host 192.168.1.10 --allowed-host 192.168.1.10
+```
+
+发现文件与能力接口里的地址都使用这个主机名，它也会自动进入 Host 白名单。
+没有指定时退回回环地址并在启动日志中提示远端客户端不可达。
+IPv6 监听地址（如 `2001:db8::1`）在地址与白名单里都会带方括号，
+与 HTTP `Host` 头的写法一致。
 
 安装后也可以直接使用 `davinci-gw-bridge` 命令。
 
@@ -148,6 +166,7 @@ Bridge 只暴露四个网关工具，参数与语义与 MCP STDIO 服务完全�
 | 传输加密 | 非回环监听必须启用 TLS（`--tls-certfile` + `--tls-keyfile`）；确已在受信隧道之后时用 `--allow-remote-insecure` 显式声明，并打印明文警告 |
 | 令牌鉴权 | 所有请求必须携带 `Authorization: Bearer <token>`；缺失或不匹配一律 401 |
 | DNS 重绑定防护 | 启用 SDK 的 `TransportSecuritySettings`，校验 `Host`/`Origin` 白名单；对外监听时用 `--allowed-host` 登记客户端实际使用的主机名 |
+| 可达地址通告 | 绑定全部接口时用 `--public-host` 指定客户端可达的主机名，发现文件与能力接口不再通告 `0.0.0.0` |
 | 凭据脱敏 | 能力接口与发现文件中的核心描述不含令牌；核心目标里的账号密码与参数里的令牌、密钥类取值一律替换为 `***` |
 | 能力清单一致 | 能力接口的工作流只列桥接实际注册的路由工具，不会把核心的修复系列工具一并广告出去 |
 | 路径安全 | 不自行解析路径；输入输出校验全部由核心执行（只接受带盘符的本地绝对路径，拒绝 UNC、设备路径与覆盖已有文件） |

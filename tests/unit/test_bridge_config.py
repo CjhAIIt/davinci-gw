@@ -56,6 +56,27 @@ def test_remote_listener_advertises_https_when_tls_is_enabled() -> None:
     assert BridgeConfig().url_for().startswith("http://")
 
 
+def test_wildcard_bind_advertises_a_reachable_host() -> None:
+    """绑定全部接口时不能把 0.0.0.0 写进发现文件，客户端连不上。"""
+    wildcard = BridgeConfig(host="0.0.0.0", allow_remote=True, allow_remote_insecure=True)
+    assert wildcard.advertised_host == "127.0.0.1"
+    assert "0.0.0.0" not in wildcard.url_for()
+
+    explicit = BridgeConfig(
+        host="0.0.0.0", allow_remote=True, allow_remote_insecure=True,
+        public_host="gateway.internal",
+    )
+    assert explicit.advertised_host == "gateway.internal"
+    assert "gateway.internal" in explicit.url_for()
+
+
+def test_ipv6_literals_are_bracketed_in_urls() -> None:
+    """IPv6 字面量必须带方括号，否则拼不出合法 URL。"""
+    config = BridgeConfig(host="2001:db8::1", allow_remote=True, allow_remote_insecure=True)
+    assert config.url_for().startswith("http://[2001:db8::1]:8765/mcp")
+    assert BridgeConfig(host="::1").url_for(9100) == "http://[::1]:9100/mcp"
+
+
 def test_invalid_port_and_path_are_rejected() -> None:
     with pytest.raises(BridgeConfigError):
         BridgeConfig(port=70000).validate()

@@ -80,6 +80,8 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
                         help="对外监听时不启用 TLS；仅在端口已置于受信加密隧道之后时使用")
     parser.add_argument("--allowed-host", action="append", default=[], metavar="HOST",
                         help="客户端实际使用的主机名或 IP，可重复；绑定全部接口时用于 Host 白名单")
+    parser.add_argument("--public-host", default=None,
+                        help="对外通告的客户端可达主机名或 IP；绑定全部接口时用它替代 0.0.0.0")
     parser.add_argument("--log-level", default="INFO", help="日志级别")
     return parser.parse_args(argv)
 
@@ -156,6 +158,13 @@ async def _serve(config: BridgeConfig, log_level: str) -> None:
                 "请确保该端口已置于受信加密隧道之后。",
                 flush=True,
             )
+        if config.wildcard_bind and not config.public_host:
+            print(
+                "警告：已绑定到全部接口但未指定 --public-host，"
+                f"对外通告的地址为 {config.advertised_host}，远端客户端无法连接；"
+                "请用 --public-host 指定客户端可达的主机名或 IP。",
+                flush=True,
+            )
         await task
     finally:
         await core.aclose()
@@ -209,6 +218,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         tls_keyfile=args.tls_keyfile,
         allow_remote_insecure=args.allow_remote_insecure,
         allowed_hosts=tuple(args.allowed_host),
+        public_host=args.public_host,
     )
     try:
         config.validate()

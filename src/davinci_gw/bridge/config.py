@@ -47,6 +47,31 @@ def is_loopback_host(host: str) -> bool:
         return False
 
 
+def is_ipv6_literal(host: str) -> bool:
+    """判断是否为 IPv6 字面量。"""
+    candidate = host.strip().strip("[]")
+    if ":" not in candidate:
+        return False
+    try:
+        return isinstance(ipaddress.ip_address(candidate), ipaddress.IPv6Address)
+    except ValueError:
+        return False
+
+
+def format_host(host: str) -> str:
+    """把主机名格式化为可用于 URL 与 Host 头的形式。
+
+    IPv6 字面量必须带方括号：URL 里是 ``[::1]``，HTTP ``Host`` 头也是
+    ``[::1]:8765``。少了方括号既拼不出合法 URL，也匹配不上白名单。
+    """
+    candidate = host.strip()
+    if candidate.startswith("[") and candidate.endswith("]"):
+        return candidate
+    if is_ipv6_literal(candidate):
+        return f"[{candidate}]"
+    return candidate
+
+
 def _normalize_name(name: str) -> str:
     """把参数名规范化为只含小写字母数字的形式，便于精确匹配。"""
     return re.sub(r"[^0-9a-z]", "", name.lower())
@@ -166,6 +191,7 @@ class BridgeConfig:
     tls_keyfile: str | None = None
     allow_remote_insecure: bool = False
     allowed_hosts: tuple[str, ...] = ()
+    public_host: str | None = None
 
     def __post_init__(self) -> None:
         """在构造时确定访问令牌。
@@ -186,6 +212,21 @@ class BridgeConfig:
     def wildcard_bind(self) -> bool:
         """是否绑定到全部网络接口。"""
         return self.host.strip().strip("[]") in WILDCARD_HOSTS
+
+    @property
+    def advertised_host(self) -> str:
+        """对外通告的客户端可达主机名。
+
+        绑定全部接口时监听地址本身（``0.0.0.0``）不是一个可连接的地址，
+        把它写进发现文件与能力接口，客户端会连到"未指定地址"上去。
+        这时优先用运维显式登记的 ``public_host``；没有登记则退回回环
+        地址，并在启动日志中提示远端客户端不可达。
+        """
+        if self.public_host:
+            return self.public_host
+        if self.wildcard_bind:
+            return DEFAULT_HOST
+        return self.host
 
     def validate(self) -> None:
         if not self.path.startswith("/"):
@@ -214,6 +255,6 @@ class BridgeConfig:
 
     def url_for(self, port: int | None = None) -> str:
         """返回客户端可用的服务地址。"""
-        host = self.host if ":" not in self.host else f"[{self.host}]"
+        host = format_host(self.advertised_host)
         scheme = "https" if self.tls_enabled else "http"
         return f"{scheme}://{host}:{port if port is not None else self.port}{self.path}"

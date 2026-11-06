@@ -238,6 +238,15 @@ def test_allowed_hosts_covers_registered_client_names() -> None:
     assert allowed_hosts("127.0.0.1") == ["127.0.0.1:*", "localhost:*", "[::1]:*"]
 
 
+def test_allowed_hosts_bracket_ipv6_literals() -> None:
+    """IPv6 监听地址的 Host 模式必须带方括号，否则匹配不上实际请求。"""
+    hosts = allowed_hosts("2001:db8::1")
+    assert "[2001:db8::1]" in hosts
+    assert "[2001:db8::1]:*" in hosts
+    # 登记的客户端地址同样处理。
+    assert "[2001:db8::2]:*" in allowed_hosts("0.0.0.0", ["2001:db8::2"])
+
+
 def test_core_failure_becomes_a_controlled_envelope() -> None:
     core = _RecordingCore(fail=True)
     server = build_bridge_server(core, config=_config())
