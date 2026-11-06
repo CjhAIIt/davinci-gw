@@ -78,6 +78,8 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--tls-keyfile", default=None, help="对外监听时的 TLS 私钥路径")
     parser.add_argument("--allow-remote-insecure", action="store_true",
                         help="对外监听时不启用 TLS；仅在端口已置于受信加密隧道之后时使用")
+    parser.add_argument("--allowed-host", action="append", default=[], metavar="HOST",
+                        help="客户端实际使用的主机名或 IP，可重复；绑定全部接口时用于 Host 白名单")
     parser.add_argument("--log-level", default="INFO", help="日志级别")
     return parser.parse_args(argv)
 
@@ -108,7 +110,14 @@ async def _serve(config: BridgeConfig, log_level: str) -> None:
     from davinci_gw.bridge.server import build_bridge_app
 
     core = build_core(config.core)
-    app = build_bridge_app(core, config=config)
+    # 端口为 0 时由系统分配实际端口；能力接口要用真实端口，
+    # 否则客户端拿到的端点是 :0，连不上。
+    bound_port: dict[str, int] = {}
+
+    def current_port() -> int | None:
+        return bound_port.get("port")
+
+    app = build_bridge_app(core, config=config, port_provider=current_port)
     uvicorn_config = uvicorn.Config(
         app, host=config.host, port=config.port, log_level=log_level.lower(), access_log=False,
         ssl_certfile=config.tls_certfile, ssl_keyfile=config.tls_keyfile,
@@ -122,6 +131,7 @@ async def _serve(config: BridgeConfig, log_level: str) -> None:
                 return
             await asyncio.sleep(0.05)
         port = _bound_port(uvicorn_server, config.port)
+        bound_port["port"] = port
         descriptor = {
             "schema_version": "1.0",
             "name": "davinci-gw-bridge",
@@ -198,6 +208,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         tls_certfile=args.tls_certfile,
         tls_keyfile=args.tls_keyfile,
         allow_remote_insecure=args.allow_remote_insecure,
+        allowed_hosts=tuple(args.allowed_host),
     )
     try:
         config.validate()

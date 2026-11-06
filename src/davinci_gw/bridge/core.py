@@ -262,9 +262,18 @@ def _create_http_client(headers: dict[str, str] | None) -> Any:
 
         return create_mcp_http_client(headers=headers)
     except Exception:  # pragma: no cover - 仅在 SDK 结构变化时触发
-        import httpx2
-
-        return httpx2.AsyncClient(headers=headers)
+        # SDK 的辅助函数不可用时退回普通客户端。不同 SDK 版本依赖的
+        # 客户端模块名不同（httpx2 / httpx），按实际装到的那个来，
+        # 写死其中一个会在另一种环境里直接启动失败。
+        for module_name in ("httpx2", "httpx"):
+            try:
+                module = __import__(module_name)
+            except ImportError:
+                continue
+            return module.AsyncClient(headers=headers)
+        raise CoreUnavailableError(
+            "缺少可用的 HTTP 客户端模块：SDK 辅助函数不可用，且未安装 httpx2 或 httpx。"
+        ) from None
 
 
 def build_core(config: CoreConfig) -> CoreClient:

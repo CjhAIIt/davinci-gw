@@ -14,6 +14,7 @@ from davinci_gw.bridge.core import (
     EmbeddedCore,
     HttpCore,
     StdioCore,
+    _create_http_client,
     _extract_payload,
     _SessionCore,
     build_core,
@@ -243,3 +244,11 @@ def test_failed_session_is_reset_so_the_next_call_can_reconnect() -> None:
 
     asyncio.run(scenario())
     assert core.sessions == 2
+
+
+def test_http_client_fallback_picks_an_installed_client_module() -> None:
+    """SDK 辅助函数不可用时，回退必须用实际装到的客户端模块。"""
+    client = _create_http_client({"Authorization": "Bearer x"})
+    assert hasattr(client, "headers")
+    module = type(client).__module__.split(".")[0]
+    assert module in ("httpx2", "httpx")

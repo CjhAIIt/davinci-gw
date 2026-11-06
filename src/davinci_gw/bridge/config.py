@@ -17,6 +17,9 @@ DEFAULT_PORT = 8765
 DEFAULT_PATH = "/mcp"
 LOOPBACK_NAMES = frozenset({"localhost"})
 
+# 绑定到全部接口的主机名；此时无法枚举客户端实际使用的主机名或 IP。
+WILDCARD_HOSTS = frozenset({"0.0.0.0", "::", ""})
+
 REDACTED = "***"
 
 # 规范化后与之相等的参数名视为敏感项：值不进入任何对外描述。
@@ -162,6 +165,7 @@ class BridgeConfig:
     tls_certfile: str | None = None
     tls_keyfile: str | None = None
     allow_remote_insecure: bool = False
+    allowed_hosts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """在构造时确定访问令牌。
@@ -177,6 +181,11 @@ class BridgeConfig:
     def tls_enabled(self) -> bool:
         """是否以 TLS 提供服务。"""
         return bool(self.tls_certfile and self.tls_keyfile)
+
+    @property
+    def wildcard_bind(self) -> bool:
+        """是否绑定到全部网络接口。"""
+        return self.host.strip().strip("[]") in WILDCARD_HOSTS
 
     def validate(self) -> None:
         if not self.path.startswith("/"):

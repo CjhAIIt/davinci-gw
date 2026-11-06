@@ -11,7 +11,7 @@ from mcp import Client
 from davinci_gw.bridge.config import BridgeConfig, CoreConfig
 from davinci_gw.bridge.core import CoreUnavailableError
 from davinci_gw.bridge.auth import BearerTokenMiddleware
-from davinci_gw.bridge.server import build_bridge_app, build_bridge_server
+from davinci_gw.bridge.server import allowed_hosts, build_bridge_app, build_bridge_server
 
 
 class _PassthroughApp:
@@ -87,14 +87,17 @@ def _envelope(tool: str, **payload: Any) -> dict[str, Any]:
 
 
 class _RecordingCore:
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(self, fail: bool = False, payload: dict[str, Any] | None = None) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.fail = fail
+        self.payload = payload
 
     async def call_tool(self, name: str, arguments: Any) -> dict[str, Any]:
         self.calls.append((name, dict(arguments)))
         if self.fail:
             raise CoreUnavailableError("core down")
+        if self.payload is not None:
+            return {**_envelope(name), **self.payload}
         return _envelope(name)
 
     async def aclose(self) -> None:
@@ -183,6 +186,56 @@ def test_capabilities_do_not_leak_core_credentials() -> None:
     text = str(captured["product"])
     assert "hunter2" not in text
     assert "abc123" not in text
+
+
+def test_capabilities_use_the_actually_bound_port() -> None:
+    """端口为 0 时能力接口必须给出实际绑定的端口，而不是 :0。"""
+    core = _RecordingCore()
+    config = BridgeConfig(port=0, core=CoreConfig(mode="embedded"))
+    server = build_bridge_server(core, config=config, port_provider=lambda: 51234)
+    captured: dict[str, Any] = {}
+
+    async def scenario() -> None:
+        async with Client(server) as client:
+            result = await client.call_tool("get_gateway_capabilities")
+            captured["product"] = result.structured_content["product"]
+
+    asyncio.run(scenario())
+    endpoint = captured["product"]["bridge"]["endpoint"]
+    assert ":51234/mcp" in endpoint
+    assert ":0/" not in endpoint
+
+
+def test_capabilities_only_advertise_the_tools_the_bridge_exposes() -> None:
+    """能力清单里的工作流不得包含桥接没有注册的修复类工具。"""
+    core = _RecordingCore(payload={"workflow": [
+        "validate_gateway_inputs", "preview_gateway_update", "generate_gateway_arxml",
+        "diagnose_generation_failure", "start_bug_repair", "get_bug_repair_status",
+        "submit_bug_repair", "cancel_bug_repair",
+    ]})
+    server = build_bridge_server(core, config=_config())
+    captured: dict[str, Any] = {}
+
+    async def scenario() -> None:
+        async with Client(server) as client:
+            result = await client.call_tool("get_gateway_capabilities")
+            captured["payload"] = result.structured_content
+
+    asyncio.run(scenario())
+    workflow = captured["payload"]["workflow"]
+    assert workflow == [
+        "validate_gateway_inputs", "preview_gateway_update", "generate_gateway_arxml",
+    ]
+
+
+def test_allowed_hosts_covers_registered_client_names() -> None:
+    """对外监听时客户端可能用可路由 IP 或域名访问，这些必须放行。"""
+    hosts = allowed_hosts("0.0.0.0", ["192.168.1.10", "gateway.internal"])
+    assert "192.168.1.10" in hosts
+    assert "192.168.1.10:*" in hosts
+    assert "gateway.internal:*" in hosts
+    # 回环监听维持原有白名单。
+    assert allowed_hosts("127.0.0.1") == ["127.0.0.1:*", "localhost:*", "[::1]:*"]
 
 
 def test_core_failure_becomes_a_controlled_envelope() -> None:

@@ -55,6 +55,7 @@ python -m davinci_gw.bridge --core http --core-target http://127.0.0.1:9100/mcp 
 | `--allow-remote` | 允许非回环监听；必须显式开启 |
 | `--tls-certfile` / `--tls-keyfile` | 对外监听时的 TLS 证书与私钥路径；两者必须同时提供 |
 | `--allow-remote-insecure` | 对外监听时不启用 TLS；仅在端口已置于受信加密隧道之后时使用 |
+| `--allowed-host` | 客户端实际使用的主机名或 IP，可重复；用于 Host 白名单 |
 | `--log-level` | 日志级别 |
 
 ### 对外监听必须加密
@@ -71,6 +72,21 @@ python -m davinci_gw.bridge --core embedded --host 0.0.0.0 --allow-remote `
 如果端口本身就位于 VPN、SSH 隧道或 mTLS 网关之后，等价于已加密，
 这时可以用 `--allow-remote-insecure` 显式声明；桥接会在启动日志中打印
 明文传输警告，提醒运维复核。回环监听不受此限制。
+
+### 客户端主机名与 Host 白名单
+
+对外监听时，客户端通常用机器的可路由 IP 或域名访问，而不是监听地址本身。
+Host 白名单无法枚举这些名字，需要显式登记：
+
+```powershell
+python -m davinci_gw.bridge --core embedded --host 0.0.0.0 --allow-remote `
+  --tls-certfile C:\certs\bridge.crt --tls-keyfile C:\certs\bridge.key `
+  --allowed-host 192.168.1.10 --allowed-host gateway.internal
+```
+
+绑定到全部接口且没有登记任何主机名时，Host 白名单无从枚举，桥接会**关闭
+Host 校验**并在日志中给出警告：此时访问控制完全由 Bearer 令牌与传输加密
+承担。登记了主机名则照常开启校验。
 
 安装后也可以直接使用 `davinci-gw-bridge` 命令。
 
@@ -131,8 +147,9 @@ Bridge 只暴露四个网关工具，参数与语义与 MCP STDIO 服务完全�
 | 回环监听 | 默认只绑定 `127.0.0.1`；非回环地址必须显式 `--allow-remote`，否则拒绝启动 |
 | 传输加密 | 非回环监听必须启用 TLS（`--tls-certfile` + `--tls-keyfile`）；确已在受信隧道之后时用 `--allow-remote-insecure` 显式声明，并打印明文警告 |
 | 令牌鉴权 | 所有请求必须携带 `Authorization: Bearer <token>`；缺失或不匹配一律 401 |
-| DNS 重绑定防护 | 启用 SDK 的 `TransportSecuritySettings`，校验 `Host`/`Origin` 白名单 |
+| DNS 重绑定防护 | 启用 SDK 的 `TransportSecuritySettings`，校验 `Host`/`Origin` 白名单；对外监听时用 `--allowed-host` 登记客户端实际使用的主机名 |
 | 凭据脱敏 | 能力接口与发现文件中的核心描述不含令牌；核心目标里的账号密码与参数里的令牌、密钥类取值一律替换为 `***` |
+| 能力清单一致 | 能力接口的工作流只列桥接实际注册的路由工具，不会把核心的修复系列工具一并广告出去 |
 | 路径安全 | 不自行解析路径；输入输出校验全部由核心执行（只接受带盘符的本地绝对路径，拒绝 UNC、设备路径与覆盖已有文件） |
 | 响应上限 | 沿用核心的有界信封：错误优先、最多 200 条问题、总响应不超过 512000 字节 |
 | 失败隔离 | 核心不可用时返回 `INTERNAL_FAILURE` 与 `BRIDGE_CORE_UNAVAILABLE`，不泄露异常细节与堆栈 |
@@ -143,6 +160,9 @@ Bridge 只暴露四个网关工具，参数与语义与 MCP STDIO 服务完全�
 
 核心会话建立失败后，桥接会清掉这次失败的状态：下一次调用会重新建立会话，
 而不是永远复用一个注定失败的任务、只能靠重启 Bridge 恢复。
+
+端口为 `0` 时由系统分配实际端口，发现文件与能力接口里的地址都使用这个
+实际端口，客户端拿到的端点可以直接连接。
 
 ## 客户端示例
 

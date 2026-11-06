@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping, Sequence
 from uuid import uuid4
 
 from mcp.server.mcpserver import MCPServer
@@ -15,7 +15,7 @@ from mcp.types import ToolAnnotations
 
 from davinci_gw import __version__ as CORE_VERSION
 from davinci_gw.bridge.config import BridgeConfig
-from davinci_gw.bridge.core import CoreClient, CoreUnavailableError
+from davinci_gw.bridge.core import BRIDGE_TOOL_NAMES, CoreClient, CoreUnavailableError
 from davinci_gw.mcp.mapping import envelope, issue
 from davinci_gw.mcp.schemas import GatewayToolResponse
 
@@ -74,7 +74,12 @@ async def _forward(core: CoreClient, name: str, arguments: Mapping[str, Any]) ->
     return payload
 
 
-def build_bridge_server(core: CoreClient, *, config: BridgeConfig) -> MCPServer[Any]:
+def build_bridge_server(
+    core: CoreClient,
+    *,
+    config: BridgeConfig,
+    port_provider: Callable[[], int | None] | None = None,
+) -> MCPServer[Any]:
     """建立桥接 MCP 服务；工具实现只做转发。"""
     server: MCPServer[Any] = MCPServer(
         name="davinci-gw-bridge",
@@ -98,10 +103,20 @@ def build_bridge_server(core: CoreClient, *, config: BridgeConfig) -> MCPServer[
         product["bridge"] = {
             "name": "davinci-gw-bridge",
             "version": BRIDGE_VERSION,
-            "endpoint": config.url_for(),
+            # 端口为 0 时由系统分配，这里要用实际绑定的端口，
+            # 否则客户端拿到的端点无法连接。
+            "endpoint": config.url_for(port_provider() if port_provider else None),
             "core": config.core.describe(),
         }
         payload = {**payload, "product": product}
+        workflow = payload.get("workflow")
+        if isinstance(workflow, list):
+            # 桥接只暴露四个路由工具；核心的能力清单里还有修复系列，
+            # 照搬会让客户端去调用本桥接根本没有注册的工具。
+            payload["workflow"] = [
+                name for name in workflow
+                if isinstance(name, str) and name in BRIDGE_TOOL_NAMES
+            ]
         return GatewayToolResponse.model_validate(payload)
 
     @server.tool(
@@ -151,18 +166,17 @@ def build_bridge_server(core: CoreClient, *, config: BridgeConfig) -> MCPServer[
     return server
 
 
-def build_bridge_app(core: CoreClient, *, config: BridgeConfig) -> Any:
+def build_bridge_app(
+    core: CoreClient,
+    *,
+    config: BridgeConfig,
+    port_provider: Callable[[], int | None] | None = None,
+) -> Any:
     """构建带令牌鉴权与 DNS 重绑定防护的 ASGI 应用。"""
-    from mcp.server.transport_security import TransportSecuritySettings
-
     from davinci_gw.bridge.auth import BearerTokenMiddleware
 
-    server = build_bridge_server(core, config=config)
-    transport_security = TransportSecuritySettings(
-        enable_dns_rebinding_protection=True,
-        allowed_hosts=allowed_hosts(config.host),
-        allowed_origins=[],
-    )
+    server = build_bridge_server(core, config=config, port_provider=port_provider)
+    transport_security = _transport_security(config)
     app = server.streamable_http_app(
         streamable_http_path=config.path,
         host=config.host,
@@ -171,8 +185,50 @@ def build_bridge_app(core: CoreClient, *, config: BridgeConfig) -> Any:
     return BearerTokenMiddleware(app, config.effective_token)
 
 
-def allowed_hosts(host: str) -> list[str]:
-    """生成 DNS 重绑定防护允许的 Host 白名单。"""
+def _transport_security(config: BridgeConfig) -> Any:
+    """按监听地址生成 Host 白名单与 DNS 重绑定防护配置。"""
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    hosts = allowed_hosts(config.host, config.allowed_hosts)
+    if config.wildcard_bind and not config.allowed_hosts:
+        # 绑定全部接口时无法枚举客户端实际使用的主机名或 IP，
+        # Host 白名单只会把合法请求挡在鉴权之前。此时关闭 Host 校验，
+        # 访问控制由 Bearer 令牌（以及对外监听时的 TLS）承担。
+        LOGGER.warning(
+            "绑定到全部接口且未指定 --allowed-host，已关闭 Host 白名单校验；"
+            "请确认该端口的访问控制由令牌与传输加密承担",
+        )
+        return TransportSecuritySettings(
+            enable_dns_rebinding_protection=False,
+            allowed_hosts=[],
+            allowed_origins=[],
+        )
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts,
+        allowed_origins=[],
+    )
+
+
+def allowed_hosts(host: str, extra: Sequence[str] = ()) -> list[str]:
+    """生成 DNS 重绑定防护允许的 Host 白名单。
+
+    ``extra`` 是运维显式登记的客户端主机名或 IP：绑定具体地址或全部
+    接口时，客户端可能用可路由 IP 或域名访问，这些名字不在监听地址里，
+    必须显式登记才能通过 Host 校验。
+    """
     if host in ("127.0.0.1", "localhost", "::1"):
-        return ["127.0.0.1:*", "localhost:*", "[::1]:*"]
-    return [host, f"{host}:*", "127.0.0.1:*", "localhost:*"]
+        base = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+    elif host.strip().strip("[]") in ("0.0.0.0", "::"):
+        base = ["127.0.0.1:*", "localhost:*"]
+    else:
+        base = [host, f"{host}:*", "127.0.0.1:*", "localhost:*"]
+    for item in extra:
+        cleaned = item.strip()
+        if not cleaned:
+            continue
+        base.append(cleaned)
+        if ":" not in cleaned:
+            # 客户端通常带端口访问，按端口通配一并放行。
+            base.append(f"{cleaned}:*")
+    return base
