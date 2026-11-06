@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -199,6 +201,34 @@ class _SlowService(_FakeService):
         return _envelope("validate_gateway_inputs")
 
 
+class _ThreadBoundService(_FakeService):
+    """模拟真实运行时：取消后还要等工作线程跑到安全边界。
+
+    ``BoundedFacadeRuntime.run`` 在收到取消时，会先通知核心再等待被屏蔽
+    的执行器任务结束；真正的 ARXML 解析没有取消检查点，要等它自己返回。
+    这里用线程池复现同样的行为，用来验证时限不会被收尾拖长。
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._executor = ThreadPoolExecutor(max_workers=1)
+
+    async def validate_gateway_inputs(self, **kwargs: Any) -> dict[str, Any]:
+        loop = asyncio.get_running_loop()
+        future = loop.run_in_executor(self._executor, self._blocking_work)
+        try:
+            return await asyncio.shield(future)
+        except asyncio.CancelledError:
+            # 与运行时一致：取消后仍要等线程结束。
+            await asyncio.shield(future)
+            raise
+
+    @staticmethod
+    def _blocking_work() -> dict[str, Any]:
+        time.sleep(3)
+        return _envelope("validate_gateway_inputs")
+
+
 def test_embedded_core_applies_the_timeout() -> None:
     core = EmbeddedCore(_SlowService(), timeout_seconds=0.05)
 
@@ -209,6 +239,29 @@ def test_embedded_core_applies_the_timeout() -> None:
             })
 
     asyncio.run(scenario())
+
+
+def test_embedded_core_timeout_returns_promptly() -> None:
+    """时限到了必须立刻返回，不能被底层收尾拖住。
+
+    进程内核心把重活放在工作线程里：``wait_for`` 取消协程之后还要等线程
+    跑到安全边界才返回，于是一次长时间的校验会把时限彻底架空。这里验证
+    超时错误在时限附近就返回。
+    """
+    service = _ThreadBoundService()
+    core = EmbeddedCore(service, timeout_seconds=0.2)
+
+    async def scenario() -> float:
+        started = asyncio.get_running_loop().time()
+        with pytest.raises(CoreUnavailableError):
+            await core.call_tool("validate_gateway_inputs", {
+                "config_path": "C:/tmp/a.xlsx", "baseline_path": "C:/tmp/a.arxml",
+            })
+        return asyncio.get_running_loop().time() - started
+
+    elapsed = asyncio.run(scenario())
+    # _SlowService 要睡 5 秒；时限是 0.2 秒，返回必须明显早于它。
+    assert elapsed < 2.0, elapsed
 
 
 def test_build_core_passes_the_timeout_to_the_core() -> None:

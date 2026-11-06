@@ -43,6 +43,36 @@ async def _await_with_timeout(awaitable: Any, timeout_seconds: float | None, lab
         raise CoreUnavailableError(f"核心调用超时（{timeout_seconds} 秒）：{label}") from exc
 
 
+def _consume_task_result(task: asyncio.Future[Any]) -> None:
+    """取出后台任务的异常，避免留下"任务异常从未被取回"的告警。"""
+    if not task.cancelled():
+        task.exception()
+
+
+async def _await_with_deadline(awaitable: Any, timeout_seconds: float | None, label: str) -> Any:
+    """到点即返回，不等底层收尾。
+
+    ``asyncio.wait_for`` 超时时必须等被取消的协程真正结束才返回。进程内
+    核心把重活放在工作线程里，取消之后运行时还要等线程到达安全边界
+    （``BoundedFacadeRuntime.run`` 会等待被屏蔽的执行器任务），一次长时间
+    的配置校验或 ARXML 解析会让 ``wait_for`` 一起被拖住——配置的时限就
+    形同虚设了。
+
+    这里改成"到点就走"：时限一到立刻返回核心不可用，后台任务自行收尾。
+    工作线程仍由运行时的信号量串行化，清理期间不会并发跑第二个重任务。
+    """
+    if timeout_seconds is None:
+        return await awaitable
+    task = asyncio.ensure_future(awaitable)
+    done, _ = await asyncio.wait({task}, timeout=timeout_seconds)
+    if task in done:
+        return task.result()
+    LOGGER.error("core call timeout label=%s timeout=%.3fs", label, timeout_seconds)
+    task.cancel()
+    task.add_done_callback(_consume_task_result)
+    raise CoreUnavailableError(f"核心调用超时（{timeout_seconds} 秒）：{label}")
+
+
 class CoreClient(Protocol):
     """桥接对核心的最小要求。"""
 
@@ -94,7 +124,9 @@ class EmbeddedCore:
             raise CoreUnavailableError(f"核心不支持工具 {name}。")
         payload = handler(**dict(arguments))
         if hasattr(payload, "__await__"):
-            payload = await _await_with_timeout(payload, self._timeout_seconds, name)
+            # 进程内核心的重活在工作线程里跑：时限必须"到点就走"，
+            # 否则 wait_for 会被线程收尾拖住，超时形同虚设。
+            payload = await _await_with_deadline(payload, self._timeout_seconds, name)
         return dict(payload)
 
     async def aclose(self) -> None:

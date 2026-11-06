@@ -29,11 +29,27 @@ SENSITIVE_NAMES = frozenset({
     "password", "passwd", "pwd", "passphrase", "pass",
     "credential", "credentials", "apikey", "accesskey", "secretkey", "privatekey",
     "sessionkey", "auth", "authorization", "key",
+    # 会话 Cookie 本身就是可直接复用的凭据：--header "Cookie: session=…"
+    # 这种写法原先原样进入对外描述。
+    "cookie", "cookies", "setcookie", "session", "sessionid", "sessioncookie", "csrftoken",
 })
 
 # 以这些词结尾的参数名同样是敏感项：--api-token、--user-token 这类变体
 # 规范化后不等于集合里的名字，但仍然是令牌类参数。
 SENSITIVE_SUFFIXES = ("token", "secret", "password", "passwd", "credential")
+
+# 复合写法里可单独成段的强凭据词：--x-api-key、--my-secret 这类。
+# 这些词本身几乎只出现在凭据语境里，命中即可判定敏感。
+_STRONG_SEGMENTS = frozenset({
+    "token", "secret", "password", "passwd", "passphrase",
+    "credential", "credentials", "apikey", "accesskey", "secretkey", "privatekey",
+    "sessionkey", "authorization", "csrftoken",
+})
+
+# 弱凭据词：单独出现时是凭据（Cookie 头、session 令牌、key），但和其它
+# 词组合多半是普通字段名（cookie_recipe、session_count、key_recipe），
+# 组合时要放过。
+_SOFT_SEGMENT_NAMES = frozenset({"cookie", "cookies", "session", "auth", "pass", "key"})
 
 
 class BridgeConfigError(ValueError):
@@ -88,14 +104,28 @@ def is_sensitive_name(name: str) -> bool:
         return True
     if normalized.endswith(SENSITIVE_SUFFIXES):
         return True
-    # 名称由若干段组成（以 _ - . 分隔）时，任意一段本身就是敏感名，
+    # 名称由若干段组成（以 _ - . 分隔）时，其中一段是区分度高的凭据词，
     # 整体即视为敏感：--x-api-key 这类写法要能识别出来。
     # 按段判断而不是按子串，"monkey"、"bypass" 这类普通词不会被误判。
-    return any(
-        _normalize_name(segment) in SENSITIVE_NAMES
+    segments = [
+        _normalize_name(segment)
         for segment in re.split(r"[_\-.]", name.lstrip("-"))
         if segment
-    )
+    ]
+    # 命中强凭据词（token、secret、credential…）直接算敏感。
+    if any(segment in _STRONG_SEGMENTS for segment in segments):
+        return True
+    # "api-key"、"access-key" 这类复合写法：api/access 与 key 相邻时
+    # 整体就是凭据名，但要排除 api_url、api_version 这类普通组合。
+    for index, segment in enumerate(segments[:-1]):
+        if segment in ("api", "access", "secret", "private", "session") and (
+            segments[index + 1] in ("key", "secret")
+        ):
+            return True
+    # 命中弱凭据词（cookie、session、auth、pass、key）时，只有名字整体
+    # 就是这个词才算敏感：cookie_recipe、session_count、key_recipe 这类
+    # 普通字段名不能被当成凭据。
+    return len(segments) == 1 and segments[0] in _SOFT_SEGMENT_NAMES
 
 
 def redact_url(target: str) -> str:
@@ -104,11 +134,15 @@ def redact_url(target: str) -> str:
     核心目标可能写成 ``https://user:pass@host/mcp?token=xxx``，
     这类值一旦原样进入对外描述，持有 Bridge 令牌的客户端就能拿到
     超出 Bridge 自身权限的凭据。
+
+    URL 解析不了时不能把原文交出去：畸形地址（��如方括号不配对的
+    IPv6）同样可能带着账号密码，解析失败就一律按整体脱敏处理。
     """
     try:
         parts = urlsplit(target)
-    except ValueError:  # pragma: no cover - urlsplit 极少抛错
-        return target
+    except ValueError:
+        # 解析失败：宁可整个目标都抹掉，也不冒泄出密码或令牌的风险。
+        return REDACTED
     if not parts.scheme or not parts.netloc:
         # 本地路径或可执行文件路径不是 URL，按原样保留。
         return target

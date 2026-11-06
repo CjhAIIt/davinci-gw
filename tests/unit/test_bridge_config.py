@@ -243,12 +243,52 @@ def test_core_description_keeps_ordinary_values_intact() -> None:
 
 def test_sensitive_name_detection_covers_compound_variants() -> None:
     """复合写法的参数名要能识别，同时不能误伤普通词。"""
-    assert is_sensitive_name("--x-api-key")
+    assert is_sensitive_name("--x-api-token")
     assert is_sensitive_name("--api-token")
     assert is_sensitive_name("--user-secret")
+    assert is_sensitive_name("--x-api-key")
+    assert is_sensitive_name("--access-key")
     assert not is_sensitive_name("--monkey")
     assert not is_sensitive_name("--bypass")
     assert not is_sensitive_name("--mode")
+
+
+def test_sensitive_name_detection_keeps_ordinary_field_names() -> None:
+    """日常词组成的普通字段名不能被当成凭据。"""
+    for name in ("cookie_recipe", "session_count", "key_recipe", "api_url", "api_version"):
+        assert not is_sensitive_name(name), name
+
+
+def test_core_description_redacts_cookie_headers() -> None:
+    """会话 Cookie 是可直接复用的凭据，不能随能力接口泄露。"""
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe",
+        args=("--header", "Cookie: session=abc123"),
+    ).describe()
+    text = str(described)
+    assert "abc123" not in text
+    assert "Cookie" in text
+
+
+def test_core_description_redacts_session_and_csrf_values() -> None:
+    """session、sessionid、CSRF 令牌同样要脱敏。"""
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe",
+        args=("--header", "session=abc123", "--header", "X-CSRF-Token: def456"),
+    ).describe()
+    text = str(described)
+    assert "abc123" not in text
+    assert "def456" not in text
+
+
+def test_core_description_redacts_a_malformed_core_url() -> None:
+    """URL 解析失败时不能把原文交出去：畸形地址同样可能带着密码。"""
+    described = CoreConfig(
+        mode="http", target="http://alice:hunter2@[::1/mcp",
+    ).describe()
+    text = str(described)
+    assert "hunter2" not in text
+    assert "alice" not in text
 
 
 def test_url_for_formats_ipv6_hosts() -> None:
