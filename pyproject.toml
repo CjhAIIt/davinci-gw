@@ -35,6 +35,9 @@ dev = [
   "pytest>=8,<10",
   "pytest-qt>=4.4,<5",
   "pyinstaller>=6.15,<7",
+  # 桥接集成测试在模块加载时就要 uvicorn；只装 [dev] 的干净环境
+  # 否则会在 pytest 收集阶段就失败。
+  "uvicorn>=0.31.1",
 ]
 
 [project.scripts]

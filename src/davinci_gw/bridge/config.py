@@ -145,24 +145,37 @@ def redact_args(args: tuple[str, ...]) -> list[str]:
     return redacted
 
 
-# 藏在参数值内部的凭据写法，例如 "Authorization: Bearer xxx"、"token=xxx"。
-# 键值形式要匹配到值结束为止，否则 "Authorization: Bearer xxx" 只会抹掉
-# "Bearer"，真正的令牌仍然留在参数里。
-_CREDENTIAL_VALUE_PATTERNS = (
-    re.compile(
-        r"(?i)\b(authorization|token|password|passwd|secret|api[_-]?key|access[_-]?key|credential)"
-        r"\s*[:=]\s*(.+)"
-    ),
-    re.compile(r"(?i)\b(bearer|basic)\s+(\"[^\"]*\"|'[^']*'|\S+)"),
+# 藏在参数值内部的凭据写法，例如 "Authorization: Bearer xxx"、
+# '--config={"api_token":"xxx"}'、"token=xxx"。键名允许前后缀与引号，
+# 以便识别 api_token、x-api-key 这类变体；取值优先按引号里的整段匹配，
+# 免得把同一段里的无关字段一起抹掉。
+_CREDENTIAL_KEY_PATTERN = re.compile(
+    r"(?i)([\"']?[\w.\-]*"
+    r"(?:token|secret|password|passwd|credential|api[_-]?key|access[_-]?key|secret[_-]?key"
+    r"|private[_-]?key|session[_-]?key|authorization)"
+    r"[\w.\-]*[\"']?)"
+    r"(\s*[:=]\s*)"
+    r"(\"[^\"]*\"|'[^']*'|[^,;}\n]+)"
 )
+_BEARER_PATTERN = re.compile(r"(?i)\b(bearer|basic)\s+(\"[^\"]*\"|'[^']*'|\S+)")
+
+
+def _redacted_placeholder(raw: str) -> str:
+    """保留原有引号形态，把取值换成占位符。"""
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+        return f"{raw[0]}{REDACTED}{raw[0]}"
+    return REDACTED
 
 
 def redact_value(text: str) -> str:
     """抹掉参数值内部以凭据语法出现的片段。"""
-    redacted = text
-    for pattern in _CREDENTIAL_VALUE_PATTERNS:
-        redacted = pattern.sub(lambda match: f"{match.group(1)} {REDACTED}", redacted)
-    return redacted
+    redacted = _CREDENTIAL_KEY_PATTERN.sub(
+        lambda match: (
+            f"{match.group(1)}{match.group(2)}{_redacted_placeholder(match.group(3))}"
+        ),
+        text,
+    )
+    return _BEARER_PATTERN.sub(lambda match: f"{match.group(1)} {REDACTED}", redacted)
 
 
 @dataclass(frozen=True)

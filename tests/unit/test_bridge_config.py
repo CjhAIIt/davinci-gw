@@ -174,6 +174,17 @@ def test_core_description_redacts_token_name_variants() -> None:
     assert "secret456" not in text
 
 
+def test_core_description_redacts_structured_credentials_in_argument_values() -> None:
+    """JSON 形式的凭据也要抹掉：--config={"api_token":"xxx"}。"""
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe",
+        args=('--config={"api_token":"abc123","mode":"fast"}',),
+    ).describe()
+    text = str(described)
+    assert "abc123" not in text
+    assert "api_token" in text
+
+
 def test_url_for_formats_ipv6_hosts() -> None:
     assert BridgeConfig(host="127.0.0.1", port=8765).url_for() == "http://127.0.0.1:8765/mcp"
     assert BridgeConfig(host="::1", port=9000).url_for(9100) == "http://[::1]:9100/mcp"
