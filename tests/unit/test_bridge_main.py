@@ -5,7 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from davinci_gw.bridge.__main__ import _split_command, _write_descriptor, main
+from davinci_gw.bridge.__main__ import (
+    _discovery_token_error,
+    _split_command,
+    _write_descriptor,
+    main,
+)
 
 
 def test_split_command_keeps_windows_paths_and_leading_dashes() -> None:
@@ -34,6 +39,19 @@ def test_remote_listener_without_tls_is_rejected(capsys: object) -> None:
         "--core", "stdio", "--core-target", "davinci-gw-mcp.exe",
         "--host", "0.0.0.0", "--allow-remote", "--tls-certfile", "cert.pem",
     ]) == 2
+
+
+def test_no_descriptor_requires_an_explicit_token(capsys: object) -> None:
+    """关掉发现文件就必须显式给令牌。
+
+    令牌缺省时随机生成，只写在发现文件里；没有发现文件时客户端就无从
+    构造 Authorization 头，每次调用都会鉴权失败。
+    """
+    assert _discovery_token_error(True, None) is not None
+    assert _discovery_token_error(True, "fixed-token") is None
+    assert _discovery_token_error(False, None) is None
+    # 命令行层同样要拦住。
+    assert main(["--core", "embedded", "--no-descriptor"]) == 2
 
 
 def test_descriptor_file_is_written_for_client_discovery(tmp_path: Path) -> None:

@@ -163,6 +163,17 @@ def test_core_description_redacts_bearer_values_without_a_key() -> None:
     assert "abc123" not in str(described)
 
 
+def test_core_description_redacts_token_name_variants() -> None:
+    """--api-token 这类变体名也要能识别，并抹掉它后面跟的凭据。"""
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe",
+        args=("--api-token", "secret123", "--user-secret", "secret456"),
+    ).describe()
+    text = str(described)
+    assert "secret123" not in text
+    assert "secret456" not in text
+
+
 def test_url_for_formats_ipv6_hosts() -> None:
     assert BridgeConfig(host="127.0.0.1", port=8765).url_for() == "http://127.0.0.1:8765/mcp"
     assert BridgeConfig(host="::1", port=9000).url_for(9100) == "http://[::1]:9100/mcp"

@@ -31,6 +31,10 @@ SENSITIVE_NAMES = frozenset({
     "sessionkey", "auth", "authorization", "key",
 })
 
+# 以这些词结尾的参数名同样是敏感项：--api-token、--user-token 这类变体
+# 规范化后不等于集合里的名字，但仍然是令牌类参数。
+SENSITIVE_SUFFIXES = ("token", "secret", "password", "passwd", "credential")
+
 
 class BridgeConfigError(ValueError):
     """桥接配置不合法；调用方必须拒绝启动。"""
@@ -79,7 +83,10 @@ def _normalize_name(name: str) -> str:
 
 def is_sensitive_name(name: str) -> bool:
     """判断参数名是否属于可能承载凭据的名称。"""
-    return _normalize_name(name.lstrip("-")) in SENSITIVE_NAMES
+    normalized = _normalize_name(name.lstrip("-"))
+    if normalized in SENSITIVE_NAMES:
+        return True
+    return normalized.endswith(SENSITIVE_SUFFIXES)
 
 
 def redact_url(target: str) -> str:

@@ -54,6 +54,18 @@ def _default_descriptor_path() -> Path:
     return Path(base) / "DaVinciGW" / DEFAULT_DESCRIPTOR_NAME
 
 
+def _discovery_token_error(no_descriptor: bool, token: str | None) -> str | None:
+    """关掉发现文件却不给令牌时返回错误说明。
+
+    令牌缺省时随机生成，只写在发现文件里；关掉发现文件就等于把令牌
+    藏了起来：服务能起来，但客户端无从构造 Authorization 头，每一次
+    调用都会鉴权失败。
+    """
+    if no_descriptor and not token:
+        return "使用 --no-descriptor 时必须显式提供 --token；随机生成的令牌没有其他可交付的途径。"
+    return None
+
+
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="davinci-gw-bridge", description="DaVinci 网关路由桥接服务")
     parser.add_argument("--core", choices=("embedded", "stdio", "http"), default="embedded",
@@ -206,6 +218,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     descriptor_path = None if args.no_descriptor else (
         Path(args.descriptor) if args.descriptor else _default_descriptor_path()
     )
+    token_error = _discovery_token_error(args.no_descriptor, args.token)
+    if token_error is not None:
+        print(f"桥接配置错误：{token_error}", file=sys.stderr)
+        return 2
     config = BridgeConfig(
         host=args.host,
         port=args.port,
