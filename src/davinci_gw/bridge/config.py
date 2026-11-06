@@ -26,7 +26,7 @@ REDACTED = "***"
 SENSITIVE_NAMES = frozenset({
     "token", "accesstoken", "authtoken", "refreshtoken", "idtoken", "bearertoken",
     "secret", "clientsecret", "apisecret", "sharedsecret",
-    "password", "passwd", "pwd", "passphrase",
+    "password", "passwd", "pwd", "passphrase", "pass",
     "credential", "credentials", "apikey", "accesskey", "secretkey", "privatekey",
     "sessionkey", "auth", "authorization", "key",
 })
@@ -86,7 +86,16 @@ def is_sensitive_name(name: str) -> bool:
     normalized = _normalize_name(name.lstrip("-"))
     if normalized in SENSITIVE_NAMES:
         return True
-    return normalized.endswith(SENSITIVE_SUFFIXES)
+    if normalized.endswith(SENSITIVE_SUFFIXES):
+        return True
+    # 名称由若干段组成（以 _ - . 分隔）时，任意一段本身就是敏感名，
+    # 整体即视为敏感：--x-api-key 这类写法要能识别出来。
+    # 按段判断而不是按子串，"monkey"、"bypass" 这类普通词不会被误判。
+    return any(
+        _normalize_name(segment) in SENSITIVE_NAMES
+        for segment in re.split(r"[_\-.]", name.lstrip("-"))
+        if segment
+    )
 
 
 def redact_url(target: str) -> str:
@@ -146,17 +155,16 @@ def redact_args(args: tuple[str, ...]) -> list[str]:
 
 
 # 藏在参数值内部的凭据写法，例如 "Authorization: Bearer xxx"、
-# '--config={"api_token":"xxx"}'、"token=xxx"。键名允许前后缀与引号，
+# '--config={"api_token":"xxx"}'、"token=xxx"。键名与取值之间允许引号，
 # 以便识别 api_token、x-api-key 这类变体；取值优先按引号里的整段匹配，
 # 免得把同一段里的无关字段一起抹掉。
-_CREDENTIAL_KEY_PATTERN = re.compile(
-    r"(?i)([\"']?[\w.\-]*"
-    r"(?:token|secret|password|passwd|credential|api[_-]?key|access[_-]?key|secret[_-]?key"
-    r"|private[_-]?key|session[_-]?key|authorization)"
-    r"[\w.\-]*[\"']?)"
-    r"(\s*[:=]\s*)"
-    r"(\"[^\"]*\"|'[^']*'|[^,;}\n]+)"
+_KEY_VALUE_PATTERN = re.compile(r"(?P<key>[\w.\-]+)[\"']?\s*[:=]\s*")
+
+# URL 里内嵌的账号密码：https://user:pass@host
+_URL_USERINFO_PATTERN = re.compile(
+    r"(?i)(?P<scheme>[a-z][a-z0-9+.\-]*://)(?P<user>[^\s/?#:@]+):(?P<password>[^\s/?#@]+)@"
 )
+
 _BEARER_PATTERN = re.compile(r"(?i)\b(bearer|basic)\s+(\"[^\"]*\"|'[^']*'|\S+)")
 
 
@@ -167,13 +175,52 @@ def _redacted_placeholder(raw: str) -> str:
     return REDACTED
 
 
+def _value_span(text: str, start: int) -> tuple[int, int]:
+    """给出取值在文本中的区间。
+
+    带引号的取值取到收尾引号为止；不带引号的取值取到分隔符
+    （逗号、分号、右括号、换行或引号）之前。
+    """
+    if start >= len(text):
+        return start, start
+    quote = text[start]
+    if quote in "\"'":
+        end = text.find(quote, start + 1)
+        return (start, len(text)) if end == -1 else (start, end + 1)
+    index = start
+    while index < len(text) and text[index] not in ",;}]\r\n\"'":
+        index += 1
+    return start, index
+
+
 def redact_value(text: str) -> str:
-    """抹掉参数值内部以凭据语法出现的片段。"""
-    redacted = _CREDENTIAL_KEY_PATTERN.sub(
-        lambda match: (
-            f"{match.group(1)}{match.group(2)}{_redacted_placeholder(match.group(3))}"
-        ),
-        text,
+    """抹掉参数值内部以凭据语法出现的片段。
+
+    凭据可能藏在三种位置：键值对（``api_token=xxx``、``"api_token":"xxx"``）、
+    URL 的用户信息段（``https://user:pass@host``）、以及裸的
+    ``Bearer xxx`` 头。三种都要抹掉，否则持有 Bridge 令牌的客户端
+    能从能力接口或发现文件里拿到核心自己的凭据。
+    """
+    pieces: list[str] = []
+    position = 0
+    for match in _KEY_VALUE_PATTERN.finditer(text):
+        if match.start() < position:
+            # 落在已经处理过的取值区间里，不再重复处理。
+            continue
+        if not is_sensitive_name(match.group("key")):
+            continue
+        value_start, value_end = _value_span(text, match.end())
+        if value_end <= value_start:
+            continue
+        pieces.append(text[position:match.start()])
+        pieces.append(text[match.start():value_start])
+        pieces.append(_redacted_placeholder(text[value_start:value_end]))
+        position = value_end
+    pieces.append(text[position:])
+    redacted = "".join(pieces)
+    redacted = _URL_USERINFO_PATTERN.sub(
+        lambda match: f"{match.group('scheme')}{match.group('user')}:{REDACTED}@",
+        redacted,
     )
     return _BEARER_PATTERN.sub(lambda match: f"{match.group(1)} {REDACTED}", redacted)
 

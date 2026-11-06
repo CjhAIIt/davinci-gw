@@ -246,6 +246,46 @@ def test_failed_session_is_reset_so_the_next_call_can_reconnect() -> None:
     assert core.sessions == 2
 
 
+class _HangingSessionCore(_SessionCore):
+    """握手永不完成的会话核心。"""
+
+    def __init__(self, timeout_seconds: float | None = None) -> None:
+        super().__init__(timeout_seconds=timeout_seconds)
+        self.sessions = 0
+
+    async def _make_client(self) -> Any:
+        self.sessions += 1
+        await asyncio.sleep(3600)
+        raise AssertionError("不应执行到这里。")
+
+
+def test_session_startup_respects_the_configured_timeout() -> None:
+    """建连握手本身也要受超时约束，不能无限期挂起。"""
+    core = _HangingSessionCore(timeout_seconds=0.2)
+
+    async def scenario() -> None:
+        with pytest.raises(CoreUnavailableError):
+            await core.call_tool("get_gateway_capabilities", {})
+        await core.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_a_timed_out_session_can_be_reconnected() -> None:
+    """握手超时后必须能重新建连，而不是复用一个挂起的会话。"""
+    core = _HangingSessionCore(timeout_seconds=0.2)
+
+    async def scenario() -> None:
+        with pytest.raises(CoreUnavailableError):
+            await core.call_tool("get_gateway_capabilities", {})
+        await core.aclose()
+
+    asyncio.run(scenario())
+    # 超时的那次会话必须被丢弃；状态复位后下一次调用会重新建连。
+    assert core.sessions == 1
+    assert core._task is None
+
+
 def test_http_client_fallback_picks_an_installed_client_module() -> None:
     """SDK 辅助函数不可用时，回退必须用实际装到的客户端模块。"""
     client = _create_http_client({"Authorization": "Bearer x"})

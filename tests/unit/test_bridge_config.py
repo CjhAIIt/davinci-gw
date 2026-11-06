@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from davinci_gw.bridge.config import BridgeConfig, BridgeConfigError, CoreConfig, is_loopback_host
+from davinci_gw.bridge.config import (
+    BridgeConfig,
+    BridgeConfigError,
+    CoreConfig,
+    is_loopback_host,
+    is_sensitive_name,
+)
 
 
 def test_default_config_is_loopback_only() -> None:
@@ -183,6 +189,66 @@ def test_core_description_redacts_structured_credentials_in_argument_values() ->
     text = str(described)
     assert "abc123" not in text
     assert "api_token" in text
+
+
+def test_core_description_redacts_url_credentials_in_argument_values() -> None:
+    """参数值里的 URL 账号密码同样不能外泄。"""
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe",
+        args=("--base-url", "https://alice:hunter2@core.internal/mcp"),
+    ).describe()
+    text = str(described)
+    assert "hunter2" not in text
+    assert "alice" in text
+    assert "core.internal" in text
+
+
+def test_core_description_redacts_url_credentials_in_structured_values() -> None:
+    """JSON 里嵌的 URL 也要抹掉账号密码。"""
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe",
+        args=('--config={"url":"http://admin:hunter2@10.0.0.5:9100/mcp","mode":"fast"}',),
+    ).describe()
+    text = str(described)
+    assert "hunter2" not in text
+    assert "10.0.0.5" in text
+    assert "mode" in text
+
+
+def test_core_description_redacts_short_credential_keys() -> None:
+    """key、pwd、auth 这类短名键同样是凭据，不能因为名字短就漏掉。"""
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe",
+        args=('--config={"key":"K1","pwd":"P1","auth":"A1","mode":"fast"}',),
+    ).describe()
+    text = str(described)
+    assert "K1" not in text
+    assert "P1" not in text
+    assert "A1" not in text
+    assert "mode" in text
+    assert "fast" in text
+
+
+def test_core_description_keeps_ordinary_values_intact() -> None:
+    """脱敏不能误伤普通字段：只有凭据位置的取值会被抹掉。"""
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe",
+        args=('--config={"mode":"fast","monkey":"zoo","bypass":"yes"}',),
+    ).describe()
+    text = str(described)
+    assert "fast" in text
+    assert "zoo" in text
+    assert "yes" in text
+
+
+def test_sensitive_name_detection_covers_compound_variants() -> None:
+    """复合写法的参数名要能识别，同时不能误伤普通词。"""
+    assert is_sensitive_name("--x-api-key")
+    assert is_sensitive_name("--api-token")
+    assert is_sensitive_name("--user-secret")
+    assert not is_sensitive_name("--monkey")
+    assert not is_sensitive_name("--bypass")
+    assert not is_sensitive_name("--mode")
 
 
 def test_url_for_formats_ipv6_hosts() -> None:

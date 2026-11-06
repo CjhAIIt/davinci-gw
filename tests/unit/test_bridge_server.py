@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from mcp import Client
 
+from davinci_gw.bridge import auth as auth_module
 from davinci_gw.bridge.config import BridgeConfig, CoreConfig
 from davinci_gw.bridge.core import CoreUnavailableError
 from davinci_gw.bridge.auth import BearerTokenMiddleware
@@ -69,6 +70,34 @@ def test_rejection_drains_the_request_body_before_responding() -> None:
     assert sent[0]["status"] == 401
     # 请求体必须已被读完，否则调用方的连接会被中断。
     assert chunks == []
+
+
+def test_rejection_gives_up_on_a_stalled_request_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """对端发一半 body 就停住时，鉴权拒绝不能一直挂着。
+
+    ``receive()`` 在对端不再发送数据时永远不会返回；没有时限的话，
+    这个 ASGI 任务与套接字会被一直占住，401 也永远发不出去。
+    """
+    monkeypatch.setattr(auth_module, "DRAIN_TIMEOUT_SECONDS", 0.2)
+    middleware = BearerTokenMiddleware(_PassthroughApp(), "secret")
+    sent: list[dict[str, Any]] = []
+
+    async def receive() -> dict[str, Any]:
+        # 模拟对端发完第一块后停住：后续 receive 永远不返回。
+        await asyncio.sleep(3600)
+        raise AssertionError("不应执行到这里。")
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    async def scenario() -> None:
+        await middleware(
+            {"type": "http", "method": "POST", "path": "/mcp", "headers": []}, receive, send,
+        )
+
+    asyncio.run(scenario())
+    # 排空时限到了就放弃剩余请求体，401 仍然要如期发出。
+    assert sent[0]["status"] == 401
 
 
 def _envelope(tool: str, **payload: Any) -> dict[str, Any]:

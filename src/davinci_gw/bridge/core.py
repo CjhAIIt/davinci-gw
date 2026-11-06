@@ -150,6 +150,9 @@ class _SessionCore:
         上一次建连失败时会话任务已经结束、就绪信号也已置位。若不清掉
         这份状态，后续请求会复用一个注定失败的任务，永远拿回同一个错误，
         只有重启 Bridge 才能恢复。这里在重连前把失败状态复位。
+
+        建连本身也要受 ``--core-timeout`` 约束：HTTP 或 STDIO 核心的
+        握手若迟迟不完成，不能让调用无限期挂起。
         """
         if self._client is not None:
             return
@@ -170,8 +173,22 @@ class _SessionCore:
                 self._error = None
                 self._task = asyncio.create_task(self._session_task())
             ready = self._ready
+            session_task = self._task
         assert ready is not None
-        await ready.wait()
+        try:
+            await _await_with_timeout(
+                ready.wait(), self._timeout_seconds, "core session startup",
+            )
+        except CoreUnavailableError:
+            # 握手超时：取消这次建连并清掉状态，让后续调用能重新建立连接，
+            # 而不是永远复用一个挂起的会话任务。
+            if self._task is session_task:
+                session_task.cancel()
+                self._task = None
+                self._ready = None
+                self._stop = None
+                self._error = None
+            raise
         if self._client is None:
             raise CoreUnavailableError("核心会话启动失败。") from self._error
 

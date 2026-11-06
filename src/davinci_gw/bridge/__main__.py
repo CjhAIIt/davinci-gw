@@ -22,7 +22,7 @@ from typing import Sequence
 
 from davinci_gw.bridge.config import BridgeConfig, BridgeConfigError, CoreConfig, is_loopback_host
 from davinci_gw.bridge.core import build_core
-from davinci_gw.bridge.server import BRIDGE_VERSION, build_bridge_server
+from davinci_gw.bridge.server import BRIDGE_VERSION, build_bridge_app, build_bridge_server
 
 LOGGER = logging.getLogger("davinci_gw.bridge")
 
@@ -120,8 +120,6 @@ def _write_descriptor(path: Path, descriptor: dict[str, object]) -> None:
 
 async def _serve(config: BridgeConfig, log_level: str) -> None:
     import uvicorn
-
-    from davinci_gw.bridge.server import build_bridge_app
 
     core = build_core(config.core)
     # 端口为 0 时由系统分配实际端口；能力接口要用真实端口，

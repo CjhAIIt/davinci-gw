@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 from typing import Any, Awaitable, Callable, MutableMapping
 
@@ -13,6 +14,10 @@ Scope = MutableMapping[str, Any]
 Message = MutableMapping[str, Any]
 Receive = Callable[[], Awaitable[Message]]
 Send = Callable[[Message], Awaitable[None]]
+
+# 排空请求体的整体时限（秒）。正常客户端的 body 远小于这个量级，
+# 超时只针对"发一半就停住"的异常对端。
+DRAIN_TIMEOUT_SECONDS = 5.0
 
 
 class BearerTokenMiddleware:
@@ -64,10 +69,24 @@ class BearerTokenMiddleware:
 
     @staticmethod
     async def _drain_body(receive: Receive) -> None:
-        """读取并丢弃请求体，最多处理 1 MiB，避免异常客户端无限占用内存。"""
+        """读取并丢弃请求体，最多处理 1 MiB，避免异常客户端无限占用内存。
+
+        排空必须有时限：对端发了一部分 body 就停住且不关闭连接时，
+        ``receive()`` 永远不会返回，鉴权拒绝也就永远发不出去，
+        请求方会把一个 ASGI 任务与套接字一直占住。这里给整体排空
+        设一个截止时间，超时后直接放弃剩余请求体并回应 401。
+        """
         limit = 1 << 20
+        deadline = asyncio.get_running_loop().time() + DRAIN_TIMEOUT_SECONDS
         while True:
-            message = await receive()
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return
+            try:
+                message = await asyncio.wait_for(receive(), timeout=remaining)
+            except (asyncio.TimeoutError, TimeoutError):
+                # 对端不再发送数据：放弃剩余请求体，鉴权结论不受影响。
+                return
             if message["type"] != "http.request":
                 return
             limit -= len(message.get("body", b""))
