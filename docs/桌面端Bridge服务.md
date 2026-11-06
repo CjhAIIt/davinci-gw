@@ -65,7 +65,7 @@ python -m davinci_gw.bridge --core http --core-target http://127.0.0.1:9100/mcp 
 {
   "schema_version": "1.0",
   "name": "davinci-gw-bridge",
-  "version": "1.3.3",
+  "version": "1.3.6",
   "pid": 1234,
   "host": "127.0.0.1",
   "port": 8765,
@@ -76,6 +76,8 @@ python -m davinci_gw.bridge --core http --core-target http://127.0.0.1:9100/mcp 
   "started_at": "2026-11-03T08:00:00+00:00"
 }
 ```
+
+`version` 与核心版本一致，由 `davinci_gw.__version__` 提供。
 
 文件含明文令牌，只应由当前用户可读；不需要客户端发现时可加 `--no-descriptor`。
 
@@ -117,6 +119,8 @@ Bridge 只暴露四个网关工具，参数与语义与 MCP STDIO 服务完全�
 | 失败隔离 | 核心不可用时返回 `INTERNAL_FAILURE` 与 `BRIDGE_CORE_UNAVAILABLE`，不泄露异常细节与堆栈 |
 
 令牌以 `hmac.compare_digest` 做常数时间比较。
+
+鉴权失败时，桥接会**先读完请求体再回 401**（上限 1 MiB）。若在客户端还在发送 body 时就直接关闭连接，Windows 网络栈会用 RST 中断连接，调用方收到的是传输层错误而不是 HTTP 状态码。排空请求体保证客户端总能读到完整的 401 响应。
 
 ## 客户端示例
 
