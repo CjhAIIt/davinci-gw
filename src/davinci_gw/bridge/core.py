@@ -126,16 +126,20 @@ class _SessionCore:
         raise NotImplementedError
 
     async def _session_task(self) -> None:
-        assert self._ready is not None
-        assert self._stop is not None
+        # 就绪信号与停止信号先取到局部变量：会话失效时属性会被置空，
+        # 旧任务收尾时仍要用得到这两个事件。
+        ready = self._ready
+        stop = self._stop
+        assert ready is not None
+        assert stop is not None
         try:
             async with await self._make_client() as client:
                 self._client = client
-                self._ready.set()
-                await self._stop.wait()
+                ready.set()
+                await stop.wait()
         except BaseException as exc:  # noqa: BLE001 - 记录后由调用方判断
             self._error = exc
-            self._ready.set()
+            ready.set()
 
     async def start(self) -> None:
         """建立核心会话；并发首次调用共享同一次建连。
@@ -175,6 +179,7 @@ class _SessionCore:
         if self._client is None:
             await self.start()
         client = self._client
+        session_task = self._task
         if client is None:
             raise CoreUnavailableError("核心会话不可用。")
         try:
@@ -185,10 +190,31 @@ class _SessionCore:
             raise
         except Exception as exc:
             LOGGER.error("core tool call failed tool=%s error_type=%s", name, type(exc).__name__)
+            # 会话建立后核心中途消失（重启、崩溃、网络中断）时，这份连接
+            # 已经不可用。留着它，后续调用会一直复用同一个坏会话，
+            # 核心恢复后也连不回去，只有重启 Bridge 才能恢复。
+            self._invalidate_session(session_task)
             raise CoreUnavailableError(f"核心调用失败：{name}") from exc
         if getattr(result, "isError", False):
             LOGGER.error("core returned error tool=%s", name)
         return _extract_payload(result)
+
+    def _invalidate_session(self, session_task: asyncio.Task[None] | None = None) -> None:
+        """丢弃当前会话，让下一次调用重新建立连接。
+
+        只清理本次调用所用的会话，避免把并发调用刚建立的新会话误清掉。
+        """
+        if session_task is not None and self._task is not session_task:
+            return
+        task = self._task
+        stop = self._stop
+        self._client = None
+        self._task = None
+        self._ready = None
+        self._stop = None
+        self._error = None
+        if task is not None and stop is not None:
+            stop.set()
 
     async def aclose(self) -> None:
         task = self._task

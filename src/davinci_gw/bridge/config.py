@@ -115,7 +115,9 @@ def redact_args(args: tuple[str, ...]) -> list[str]:
     """抹掉命令行参数中的凭据。
 
     同时覆盖 ``--token=xxx`` 与 ``--token xxx`` 两种写法；参数名不含
-    敏感字样的值原样保留，便于客户端判断核心形态。
+    敏感字样的值原样保留，便于客户端判断核心形态。凭据也可能藏在参数值
+    内部（例如 ``--header "Authorization: Bearer xxx"``），这类内容
+    同样要抹掉。
     """
     redacted: list[str] = []
     redact_next = False
@@ -132,7 +134,27 @@ def redact_args(args: tuple[str, ...]) -> list[str]:
             redacted.append(arg)
             redact_next = True
             continue
-        redacted.append(arg)
+        redacted.append(redact_value(arg))
+    return redacted
+
+
+# 藏在参数值内部的凭据写法，例如 "Authorization: Bearer xxx"、"token=xxx"。
+# 键值形式要匹配到值结束为止，否则 "Authorization: Bearer xxx" 只会抹掉
+# "Bearer"，真正的令牌仍然留在参数里。
+_CREDENTIAL_VALUE_PATTERNS = (
+    re.compile(
+        r"(?i)\b(authorization|token|password|passwd|secret|api[_-]?key|access[_-]?key|credential)"
+        r"\s*[:=]\s*(.+)"
+    ),
+    re.compile(r"(?i)\b(bearer|basic)\s+(\"[^\"]*\"|'[^']*'|\S+)"),
+)
+
+
+def redact_value(text: str) -> str:
+    """抹掉参数值内部以凭据语法出现的片段。"""
+    redacted = text
+    for pattern in _CREDENTIAL_VALUE_PATTERNS:
+        redacted = pattern.sub(lambda match: f"{match.group(1)} {REDACTED}", redacted)
     return redacted
 
 

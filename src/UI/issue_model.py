@@ -36,6 +36,10 @@ SEVERITY_LABELS = {
     "INFO": "提示",
 }
 
+# 问题表行高：描述最多两行、工程建议最多三行，需要 108 像素才放得下。
+# 表格的表头行高与自绘委托共用这个值，避免两处漂移导致内容被裁剪。
+ISSUE_ROW_HEIGHT = 108
+
 
 class IssueTableModel(QAbstractTableModel):
     """以稳定列顺序展示公共 IssueDto。"""
@@ -277,16 +281,15 @@ class IssueTableDelegate(QStyledItemDelegate):
         self._theme = theme
 
     def sizeHint(self, option, index) -> QSize:  # noqa: N802
+        """给出满内容行高：描述两行、工程建议三行都要放得下。"""
         base = super().sizeHint(option, index)
-        return QSize(base.width(), 108)
+        return QSize(base.width(), ISSUE_ROW_HEIGHT)
 
     @staticmethod
-    def _draw_wrapped(painter: QPainter, text: str, rect: QRectF, max_lines: int) -> None:
-        """在限定行数内绘制换行文本，超出的部分用省略号收尾。"""
+    def _wrap_lines(text: str, width: float, fm, max_lines: int) -> list[str]:
+        """按当前字体度量把文本折行；绘制与行高测量共用同一套规则。"""
         if not text:
-            return
-        fm = painter.fontMetrics()
-        width = max(1.0, rect.width())
+            return []
         lines: list[str] = []
         current = ""
         current_width = 0.0
@@ -304,6 +307,16 @@ class IssueTableDelegate(QStyledItemDelegate):
             lines.append(current)
         if len(lines) == max_lines and len("".join(lines)) < len(text):
             lines[-1] = fm.elidedText(lines[-1] + "…", Qt.ElideRight, int(width))
+        return lines
+
+    @staticmethod
+    def _draw_wrapped(painter: QPainter, text: str, rect: QRectF, max_lines: int) -> None:
+        """在限定行数内绘制换行文本，超出的部分用省略号收尾。"""
+        if not text:
+            return
+        fm = painter.fontMetrics()
+        width = max(1.0, rect.width())
+        lines = IssueTableDelegate._wrap_lines(text, width, fm, max_lines)
         line_height = fm.lineSpacing()
         for idx, line in enumerate(lines):
             painter.drawText(

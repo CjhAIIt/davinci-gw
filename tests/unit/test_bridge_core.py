@@ -252,3 +252,47 @@ def test_http_client_fallback_picks_an_installed_client_module() -> None:
     assert hasattr(client, "headers")
     module = type(client).__module__.split(".")[0]
     assert module in ("httpx2", "httpx")
+
+
+class _DroppingSessionCore(_SessionCore):
+    """会话建立后调用失败一次、随后恢复的核心。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.sessions = 0
+        # 同一个客户端实例跨会话复用：失效后重建会话时调用次数继续累计，
+        # 才能验证第二次调用确实连上了恢复后的核心。
+        self.client = _DroppingClient()
+
+    async def _make_client(self) -> Any:
+        self.sessions += 1
+        return self.client
+
+
+class _DroppingClient(_FakeSessionClient):
+    """第一次调用抛出传输错误，之后恢复正常。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.call_count = 0
+
+    async def call_tool(self, name: str, arguments: Any) -> Any:
+        self.call_count += 1
+        if self.call_count == 1:
+            raise ConnectionResetError("核心进程已退出")
+        return await super().call_tool(name, arguments)
+
+
+def test_transport_failure_invalidates_the_session_so_the_next_call_reconnects() -> None:
+    """会话建立后核心消失时必须丢弃旧会话，核心恢复后能重新连上。"""
+    core = _DroppingSessionCore()
+
+    async def scenario() -> None:
+        with pytest.raises(CoreUnavailableError):
+            await core.call_tool("get_gateway_capabilities", {})
+        result = await core.call_tool("get_gateway_capabilities", {})
+        assert result["status"] == "SUCCESS"
+        await core.aclose()
+
+    asyncio.run(scenario())
+    assert core.sessions == 2

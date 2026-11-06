@@ -45,7 +45,12 @@ from .components import (
     make_icon,
 )
 from .detail_dialog import FeatureDetailDialog, IssueDetailDialog
-from .issue_model import IssueFilterProxyModel, IssueTableDelegate, IssueTableModel
+from .issue_model import (
+    ISSUE_ROW_HEIGHT,
+    IssueFilterProxyModel,
+    IssueTableDelegate,
+    IssueTableModel,
+)
 from .logging_config import log_path
 from .state import GuiState
 from .styles import THEMES, apply_theme, detect_system_theme
@@ -54,8 +59,7 @@ from .view_model import GatewayViewModel
 LAYOUT_BENTO = "bento"
 
 SIDEBAR_WIDTH = 470
-ISSUE_ROW_HEIGHT = 108
-ISSUE_MAX_VISIBLE_ROWS = 8
+ISSUE_MIN_VISIBLE_ROWS = 3
 AUTOSAR_VERSION = "AUTOSAR R4.2.2"
 
 
@@ -85,6 +89,9 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self._build_ui()
         self._connect()
+        # 自绘控件有各自的默认主题，启动时必须同步一次；
+        # 只在用户手动切换时应用会让深色主题下的网格背景与文件槽图标停在浅色。
+        self._apply_theme_to_widgets(self._theme)
         geometry = self.settings.value("window/geometry")
         if geometry:
             self.restoreGeometry(geometry)
@@ -397,12 +404,16 @@ class MainWindow(QMainWindow):
             self.issue_table.setColumnWidth(column, width)
         header.setSectionResizeMode(4, QHeaderView.Stretch)
         self.issue_table.verticalHeader().setVisible(False)
-        self.issue_table.verticalHeader().setDefaultSectionSize(68)
+        # 行高必须显式固定：QTableView 只在表头为 ResizeToContents 时才采用
+        # 委托的 sizeHint，默认按 defaultSectionSize 排版，会把三行处理建议裁掉。
+        self.issue_table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        self.issue_table.verticalHeader().setDefaultSectionSize(ISSUE_ROW_HEIGHT)
         list_frame = QFrame()
         list_frame.setObjectName("issueListFrame")
         list_layout = QVBoxLayout(list_frame)
         list_layout.setContentsMargins(0, 0, 0, 0)
-        list_layout.addWidget(self.issue_table)
+        # 表格占满卡片里剩余高度，问题多时在表格内部滚动。
+        list_layout.addWidget(self.issue_table, 1)
 
         self.issue_empty = QLabel("暂无问题。预览完成后，错误、警告与保留决定会显示在这里。")
         self.issue_empty.setObjectName("emptyHint")
@@ -430,13 +441,13 @@ class MainWindow(QMainWindow):
             layout.addWidget(widget, 1)
         layout.addWidget(self.open_log_button, 0)
 
-    def _place(self, widget, layout) -> None:
+    def _place(self, widget, layout, *, stretch: int = 0) -> None:
         """把共享卡片放入指定布局。"""
         parent = widget.parentWidget()
         if parent is not None and parent.layout() is not None:
             parent.layout().removeWidget(widget)
         widget.setParent(None)
-        layout.addWidget(widget)
+        layout.addWidget(widget, stretch)
         widget.show()
 
     def _set_layout_mode(self, mode: str) -> None:
@@ -444,9 +455,10 @@ class MainWindow(QMainWindow):
         for widget in (self._input_card, self._actions_card, self.result_group, self.feature_group):
             self._place(widget, self._left)
         for widget in (self.status_banner, self.progress, self._issues_card, self.check_group):
-            self._place(widget, self._right)
+            # 问题表吃掉右栏剩余空间：行高按三行建议预留，卡片太矮会把
+            # 处理建议裁掉，卡片自己滚动也不如让表格占满可用区域。
+            self._place(widget, self._right, stretch=1 if widget is self._issues_card else 0)
         self._left.addStretch(1)
-        self._right.addStretch(1)
         self._layout_mode = mode
         # 布局切换会重新挂载卡片，这里恢复由业务状态决定的显隐，避免空卡片与残留进度条。
         self.result_group.setVisible(bool(self.vm.artifact_path))
@@ -510,11 +522,19 @@ class MainWindow(QMainWindow):
         self._sync_issue_table_height()
 
     def _sync_issue_table_height(self) -> None:
-        """按可见问题条数调整表格高度，避免只露出两三行。"""
-        rows = self.issue_proxy.rowCount()
-        visible = min(max(rows, 1), ISSUE_MAX_VISIBLE_ROWS)
+        """给表格一个最小高度，至少能完整看到几行问题。
+
+        表格实际高度由卡片内的可用空间决定（卡片吃掉右栏剩余空间），
+        这里只保证下界：行高按三行处理建议预留，行数少时也不该把
+        建议裁掉。
+
+        行数取源模型而不是筛选代理：代理在模型重置后会延迟刷新，
+        此刻读到的是上一轮的旧值，会把表格按一两行的高度来算。
+        """
+        rows = self.issue_model.rowCount()
+        visible = min(max(rows, 1), ISSUE_MIN_VISIBLE_ROWS)
         header = self.issue_table.horizontalHeader().height() or 34
-        self.issue_table.setFixedHeight(header + visible * ISSUE_ROW_HEIGHT + 2)
+        self.issue_table.setMinimumHeight(header + visible * ISSUE_ROW_HEIGHT + 2)
 
     def _on_filter_changed(self, *args) -> None:
         """级别筛选或搜索后同步表格高度。"""
@@ -798,6 +818,10 @@ class MainWindow(QMainWindow):
         if app is not None:
             apply_theme(app, theme)
         self.settings.setValue("ui/theme", theme)
+        self._apply_theme_to_widgets(theme)
+
+    def _apply_theme_to_widgets(self, theme: str) -> None:
+        """把主题同步给自绘控件；启动时也要调用一次。"""
         self.config_slot.set_theme(theme)
         self.baseline_slot.set_theme(theme)
         self._right_host.set_theme(theme)

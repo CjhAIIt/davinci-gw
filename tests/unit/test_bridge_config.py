@@ -144,6 +144,25 @@ def test_core_description_redacts_credentials_in_arguments() -> None:
     assert "fast" in text
 
 
+def test_core_description_redacts_credentials_embedded_in_argument_values() -> None:
+    """凭据藏在参数值里时同样要抹掉，例如 --header "Authorization: Bearer xxx"。"""
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe",
+        args=("--header", "Authorization: Bearer abc123", "--mode", "fast"),
+    ).describe()
+    text = str(described)
+    assert "abc123" not in text
+    assert "fast" in text
+
+
+def test_core_description_redacts_bearer_values_without_a_key() -> None:
+    """只有 Bearer 形式时也要抹掉后面的凭据。"""
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe", args=("--auth", "Bearer abc123"),
+    ).describe()
+    assert "abc123" not in str(described)
+
+
 def test_url_for_formats_ipv6_hosts() -> None:
     assert BridgeConfig(host="127.0.0.1", port=8765).url_for() == "http://127.0.0.1:8765/mcp"
     assert BridgeConfig(host="::1", port=9000).url_for(9100) == "http://[::1]:9100/mcp"

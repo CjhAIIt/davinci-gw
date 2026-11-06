@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Signal, Qt
+from PySide6.QtCore import QObject, QPoint, Qt, Signal
 from PySide6.QtWidgets import QLabel, QPushButton
 
 from UI.components import PillButton
@@ -218,6 +218,102 @@ def test_theme_switch_changes_stylesheet_and_remembers_choice(qtbot, tmp_path: P
         assert window.settings.value("ui/theme") == "light"
     finally:
         QSettings.setDefaultFormat(original_format)
+
+
+def test_persisted_theme_reaches_custom_painted_widgets_on_startup(qtbot, tmp_path: Path) -> None:
+    """启动时就要按已保存的主题换肤，不能等用户手动切换一次。
+
+    自绘的网格背景与文件槽图标有各自的默认主题；只在切换时同步的话，
+    深色主题下打开工作台会看到浅色的网格与图标。
+    """
+    from PySide6.QtCore import QSettings
+
+    original_format = QSettings.defaultFormat()
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path))
+    try:
+        QSettings().setValue("ui/theme", "dark")
+        runner = _FakeRunner()
+        view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
+        window = MainWindow(view_model)
+        qtbot.addWidget(window)
+
+        assert window._theme == "dark"
+        assert window.config_slot.icon_widget._theme == "dark"
+        assert window.baseline_slot.icon_widget._theme == "dark"
+        assert window._right_host._theme == "dark"
+        assert window.issue_delegate._theme == "dark"
+        # 启动时读取的主题不应被写回设置，首次启动仍跟随系统。
+        assert window.settings.value("ui/theme") == "dark"
+    finally:
+        QSettings.setDefaultFormat(original_format)
+
+
+def test_issue_rows_are_tall_enough_for_the_recommendation_text(qtbot) -> None:
+    """行高必须放得下三行处理建议，否则建议会被裁掉。"""
+    from UI.issue_model import ISSUE_ROW_HEIGHT
+
+    runner = _FakeRunner()
+    view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    model = window.issue_model
+    model.set_issues(issues_to_dto((ValidationIssue(
+        "PDUR_ROUTING_GROUP_NON_MAIN_MEMBER", "基线一致性警告", severity=ValidationSeverity.WARNING,
+    ),)))
+    qtbot.wait(10)
+
+    assert window.issue_table.rowHeight(0) == ISSUE_ROW_HEIGHT
+    assert ISSUE_ROW_HEIGHT >= 108
+
+
+def test_issue_card_takes_the_remaining_workbench_height(qtbot) -> None:
+    """问题卡片要占满右栏剩余空间。
+
+    卡片太矮时表格只露出一两行，后面的行连同处理建议一起被裁掉，
+    表格内部也几乎无法滚动查看。
+    """
+    from UI.issue_model import ISSUE_ROW_HEIGHT
+    from UI.main_window import ISSUE_MIN_VISIBLE_ROWS
+
+    runner = _FakeRunner()
+    view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+    window.resize(1440, 900)
+
+    window._issue_model_changed(issues_to_dto(tuple(
+        ValidationIssue(f"CODE_{index}", f"第 {index} 条问题描述。", severity=ValidationSeverity.WARNING)
+        for index in range(8)
+    )))
+    qtbot.wait(20)
+
+    # 表格至少能完整显示 ISSUE_MIN_VISIBLE_ROWS 行。
+    header = window.issue_table.horizontalHeader().height() or 34
+    assert window.issue_table.minimumHeight() >= header + ISSUE_MIN_VISIBLE_ROWS * ISSUE_ROW_HEIGHT
+    # 卡片吃掉右栏剩余空间，不再留大片空白。
+    index = window._right.indexOf(window._issues_card)
+    assert index >= 0
+    assert window._right.stretch(index) == 1
+
+
+def test_clicking_the_row_checkbox_confirms_the_issue(qtbot) -> None:
+    """首列画出来的复选框必须可点，能切换人工确认状态。"""
+    runner = _FakeRunner()
+    view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    model = window.issue_model
+    model.set_issues(issues_to_dto((ValidationIssue(
+        "PDUR_ROUTING_GROUP_NON_MAIN_MEMBER", "基线一致性警告", severity=ValidationSeverity.WARNING,
+    ),)))
+    qtbot.wait(10)
+
+    assert model.acknowledged(0) is False
+    qtbot.mouseClick(window.issue_table.viewport(), Qt.LeftButton, pos=QPoint(10, 10))
+    assert model.acknowledged(0) is True
 
 
 def test_cards_are_placed_in_the_two_column_workbench(qtbot) -> None:
