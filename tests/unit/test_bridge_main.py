@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from davinci_gw.bridge.__main__ import (
     _discovery_token_error,
@@ -60,3 +64,27 @@ def test_descriptor_file_is_written_for_client_discovery(tmp_path: Path) -> None
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["url"] == "http://127.0.0.1:8765/mcp"
     assert payload["token"] == "t"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL 语义")
+def test_descriptor_file_is_readable_only_by_the_current_user(tmp_path: Path) -> None:
+    """发现文件里有明文令牌，其它本地账号不能读到。
+
+    ``os.chmod(path, 0o600)`` 在 Windows 上只改只读属性，不建立
+    owner-only 的 DACL——实测改完之后文件仍是 0o666，别的账号照样能读。
+    这里用 icacls 核对真实的访问控制表。
+    """
+    path = tmp_path / "bridge.json"
+    _write_descriptor(path, {"url": "http://127.0.0.1:8765/mcp", "token": "t"})
+
+    completed = subprocess.run(
+        ["icacls", str(path)], capture_output=True, text=True, encoding="utf-8",
+        errors="replace", check=True,
+    )
+    acl = completed.stdout
+    # 只应剩下当前用户自己的授权，其余继承项必须被清掉。
+    assert "Everyone" not in acl
+    assert "BUILTIN\\Users" not in acl
+    assert "(I)" not in acl, acl
+    # 内容本身仍要可读，否则客户端拿不到令牌。
+    assert json.loads(path.read_text(encoding="utf-8"))["token"] == "t"

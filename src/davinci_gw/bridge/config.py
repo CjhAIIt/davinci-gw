@@ -135,7 +135,7 @@ def redact_url(target: str) -> str:
     这类值一旦原样进入对外描述，持有 Bridge 令牌的客户端就能拿到
     超出 Bridge 自身权限的凭据。
 
-    URL 解析不了时不能把原文交出去：畸形地址（��如方括号不配对的
+    URL 解析不了时不能把原文交出去：畸形地址（例如方括号不配对的
     IPv6）同样可能带着账号密码，解析失败就一律按整体脱敏处理。
     """
     try:
@@ -143,8 +143,14 @@ def redact_url(target: str) -> str:
     except ValueError:
         # 解析失败：宁可整个目标都抹掉，也不冒泄出密码或令牌的风险。
         return REDACTED
-    if not parts.scheme or not parts.netloc:
-        # 本地路径或可执行文件路径不是 URL，按原样保留。
+    if not parts.scheme:
+        # 没有协议头就不是 URL（本地路径、可执行文件路径），按原样保留。
+        return target
+    if not parts.netloc:
+        # 有协议头却没有主机部分：``http:///mcp?token=secret`` 这类写法
+        # 解析得出来，但查询参数里的令牌仍是凭据，不能原样外泄。
+        if parts.query:
+            return urlunsplit((parts.scheme, "", parts.path, REDACTED, parts.fragment))
         return target
     netloc = parts.netloc
     if "@" in netloc:
@@ -281,6 +287,15 @@ class CoreConfig:
             raise BridgeConfigError(f"核心模式 {self.mode} 必须提供核心目标。")
         if self.mode == "http" and not str(self.target).lower().startswith(("http://", "https://")):
             raise BridgeConfigError("http 核心目标必须是 http 或 https 地址。")
+        if self.mode == "http":
+            # 光有协议头不够：http:///mcp 这种写法没有主机部分，
+            # 既连不上，查询参数里的令牌也会跟着外泄。
+            try:
+                parts = urlsplit(str(self.target))
+            except ValueError as exc:
+                raise BridgeConfigError(f"http 核心目标不是合法地址：{exc}") from exc
+            if not parts.netloc:
+                raise BridgeConfigError("http 核心目标必须包含主机名或 IP。")
         if self.timeout_seconds <= 0:
             raise BridgeConfigError("核心超时必须为正数。")
 

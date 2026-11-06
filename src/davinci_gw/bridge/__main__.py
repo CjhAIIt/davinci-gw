@@ -109,13 +109,69 @@ def _bound_port(server: Any, fallback: int) -> int:
     return fallback
 
 
+def _restrict_descriptor_permissions(path: Path) -> None:
+    """把发现文件限制为仅当前用户可读。
+
+    发现文件里写着明文访问令牌，别的本地账号能读到就等于拿到了
+    Bridge 的调用权限。
+
+    ``os.chmod(path, 0o600)`` 在 Windows 上只改只读属性，不建立
+    owner-only 的 DACL——实测改完之后文件仍是 0o666，ACL 里其它用户
+    照样能读。所以 Windows 上改用 ``icacls`` 重设访问控制表：清掉
+    继承的权限，只留下当前用户。
+    """
+    if os.name != "nt":
+        try:
+            os.chmod(path, 0o600)
+        except OSError:  # pragma: no cover - 权限受限的环境
+            pass
+        return
+    try:
+        import subprocess
+
+        # 先清空继承的 ACE，再只授予当前用户完全控制。
+        subprocess.run(
+            ["icacls", str(path), "/inheritance:r", "/grant:r", f"{_current_user_sid()}:(F)"],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - 取决于系统环境
+        # icacls 不可用时至少去掉写权限，避免令牌被就地改写。
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+
+
+def _current_user_sid() -> str:
+    """取当前用户的 SID（形如 ``DOMAIN\\name``），用于授权。"""
+    try:
+        import subprocess
+
+        completed = subprocess.run(
+            ["whoami", "/user", "/fo", "csv", "/nh"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        # 输出形如 "info","user","PC\user","S-1-5-21-...\n"
+        for line in completed.stdout.splitlines():
+            fields = [item.strip('" ') for item in line.split(",")]
+            if len(fields) >= 4 and fields[-1].upper().startswith("S-1-"):
+                return fields[-1]
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - 取决于系统环境
+        pass
+    import getpass
+
+    return getpass.getuser()
+
+
 def _write_descriptor(path: Path, descriptor: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(descriptor, ensure_ascii=False, indent=2), encoding="utf-8")
-    try:
-        os.chmod(path, 0o600)
-    except OSError:  # pragma: no cover - Windows 上权限语义不同
-        pass
+    _restrict_descriptor_permissions(path)
 
 
 async def _serve(config: BridgeConfig, log_level: str) -> None:

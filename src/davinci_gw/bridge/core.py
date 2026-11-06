@@ -60,11 +60,21 @@ async def _await_with_deadline(awaitable: Any, timeout_seconds: float | None, la
 
     这里改成"到点就走"：时限一到立刻返回核心不可用，后台任务自行收尾。
     工作线程仍由运行时的信号量串行化，清理期间不会并发跑第二个重任务。
+
+    调用方主动取消时同样要把取消传给子任务：否则核心收不到
+    ``BoundedFacadeRuntime`` 用来通知工作线程的取消信号，调用方已经
+    放弃这次调用之后，核心还会把 ARXML 写出来。
     """
     if timeout_seconds is None:
         return await awaitable
     task = asyncio.ensure_future(awaitable)
-    done, _ = await asyncio.wait({task}, timeout=timeout_seconds)
+    try:
+        done, _ = await asyncio.wait({task}, timeout=timeout_seconds)
+    except asyncio.CancelledError:
+        # 调用方放弃这次调用：把取消传下去，让核心尽快收手。
+        task.cancel()
+        task.add_done_callback(_consume_task_result)
+        raise
     if task in done:
         return task.result()
     LOGGER.error("core call timeout label=%s timeout=%.3fs", label, timeout_seconds)

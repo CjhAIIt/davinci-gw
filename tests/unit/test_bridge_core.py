@@ -241,6 +241,47 @@ def test_embedded_core_applies_the_timeout() -> None:
     asyncio.run(scenario())
 
 
+def test_embedded_core_cancels_the_worker_when_the_caller_cancels() -> None:
+    """调用方取消时必须把取消传给核心，否则核心还会把 ARXML 写出来。
+
+    ``BoundedFacadeRuntime`` 靠收到取消信号来通知工作线程收手；桥接只是
+    丢下子任务不管，核心那边就收不到信号，调用方放弃之后生成仍会继续。
+    """
+    service = _CancellableService()
+    core = EmbeddedCore(service, timeout_seconds=30.0)
+
+    async def scenario() -> None:
+        task = asyncio.ensure_future(core.call_tool("generate_gateway_arxml", {}))
+        await asyncio.sleep(0.2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        # 给取消信号一点时间传到核心。
+        for _ in range(20):
+            if service.cancelled:
+                break
+            await asyncio.sleep(0.05)
+        assert service.cancelled, "核心没有收到取消信号"
+
+    asyncio.run(scenario())
+
+
+class _CancellableService(_FakeService):
+    """记录是否收到取消信号的核心服务替身。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancelled = False
+
+    async def generate_gateway_arxml(self, **kwargs: Any) -> dict[str, Any]:
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        return _envelope("generate_gateway_arxml")
+
+
 def test_embedded_core_timeout_returns_promptly() -> None:
     """时限到了必须立刻返回，不能被底层收尾拖住。
 

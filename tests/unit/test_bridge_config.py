@@ -291,6 +291,23 @@ def test_core_description_redacts_a_malformed_core_url() -> None:
     assert "alice" not in text
 
 
+def test_core_description_redacts_an_http_target_without_a_host() -> None:
+    """有协议头却没有主机部分时，查询参数里的令牌同样不能外泄。"""
+    described = CoreConfig(
+        mode="http", target="http:///mcp?token=secret123",
+    ).describe()
+    text = str(described)
+    assert "secret123" not in text
+
+
+def test_http_core_target_must_carry_a_host() -> None:
+    """http 核心目标必须包含主机名或 IP：这种地址连不通。"""
+    with pytest.raises(BridgeConfigError):
+        CoreConfig(mode="http", target="http:///mcp?token=secret123").validate()
+    # 正常地址不受影响。
+    CoreConfig(mode="http", target="http://127.0.0.1:9100/mcp").validate()
+
+
 def test_url_for_formats_ipv6_hosts() -> None:
     assert BridgeConfig(host="127.0.0.1", port=8765).url_for() == "http://127.0.0.1:8765/mcp"
     assert BridgeConfig(host="::1", port=9000).url_for(9100) == "http://[::1]:9100/mcp"
