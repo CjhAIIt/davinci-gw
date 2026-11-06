@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-from davinci_gw.bridge.config import BridgeConfig, BridgeConfigError, CoreConfig
+from davinci_gw.bridge.config import BridgeConfig, BridgeConfigError, CoreConfig, is_loopback_host
 from davinci_gw.bridge.core import build_core
 from davinci_gw.bridge.server import BRIDGE_VERSION, build_bridge_server
 
@@ -74,6 +74,10 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--descriptor", default=None, help="客户端发现文件路径")
     parser.add_argument("--no-descriptor", action="store_true", help="不写客户端发现文件")
     parser.add_argument("--allow-remote", action="store_true", help="允许非回环监听；必须显式开启")
+    parser.add_argument("--tls-certfile", default=None, help="对外监听时的 TLS 证书路径")
+    parser.add_argument("--tls-keyfile", default=None, help="对外监听时的 TLS 私钥路径")
+    parser.add_argument("--allow-remote-insecure", action="store_true",
+                        help="对外监听时不启用 TLS；仅在端口已置于受信加密隧道之后时使用")
     parser.add_argument("--log-level", default="INFO", help="日志级别")
     return parser.parse_args(argv)
 
@@ -107,6 +111,7 @@ async def _serve(config: BridgeConfig, log_level: str) -> None:
     app = build_bridge_app(core, config=config)
     uvicorn_config = uvicorn.Config(
         app, host=config.host, port=config.port, log_level=log_level.lower(), access_log=False,
+        ssl_certfile=config.tls_certfile, ssl_keyfile=config.tls_keyfile,
     )
     uvicorn_server = uvicorn.Server(uvicorn_config)
     task = asyncio.create_task(uvicorn_server.serve())
@@ -135,6 +140,12 @@ async def _serve(config: BridgeConfig, log_level: str) -> None:
         print(f"桥接服务已就绪：{descriptor['url']}", flush=True)
         if config.descriptor_path is not None:
             print(f"客户端发现文件：{config.descriptor_path}", flush=True)
+        if not config.tls_enabled and not is_loopback_host(config.host):
+            print(
+                "警告：当前对外监听未启用 TLS，令牌与路由结果以明文传输；"
+                "请确保该端口已置于受信加密隧道之后。",
+                flush=True,
+            )
         await task
     finally:
         await core.aclose()
@@ -184,6 +195,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         core=core_config,
         descriptor_path=descriptor_path,
         allow_remote=args.allow_remote,
+        tls_certfile=args.tls_certfile,
+        tls_keyfile=args.tls_keyfile,
+        allow_remote_insecure=args.allow_remote_insecure,
     )
     try:
         config.validate()

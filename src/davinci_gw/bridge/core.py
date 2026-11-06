@@ -142,6 +142,10 @@ class _SessionCore:
 
         多个请求同时到达时，只允许其中一个真正建立会话，其余请求等待
         同一个就绪信号后再继续，避免出现“核心会话不可用”的裸失败。
+
+        上一次建连失败时会话任务已经结束、就绪信号也已置位。若不清掉
+        这份状态，后续请求会复用一个注定失败的任务，永远拿回同一个错误，
+        只有重启 Bridge 才能恢复。这里在重连前把失败状态复位。
         """
         if self._client is not None:
             return
@@ -150,6 +154,12 @@ class _SessionCore:
         async with self._lock:
             if self._client is not None:
                 return
+            if self._task is not None and self._task.done():
+                # 任务已结束说明上一次会话没能建立起来（失败或被取消）。
+                self._task = None
+                self._ready = None
+                self._stop = None
+                self._error = None
             if self._task is None:
                 self._ready = asyncio.Event()
                 self._stop = asyncio.Event()
@@ -182,13 +192,16 @@ class _SessionCore:
 
     async def aclose(self) -> None:
         task = self._task
+        stop = self._stop
         self._task = None
         self._client = None
         self._lock = None
+        self._ready = None
+        self._stop = None
         if task is None:
             return
-        assert self._stop is not None
-        self._stop.set()
+        if stop is not None:
+            stop.set()
         try:
             await task
         except Exception as exc:  # pragma: no cover - 关闭期异常不影响退出

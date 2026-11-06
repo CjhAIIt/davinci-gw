@@ -214,3 +214,32 @@ def test_build_core_passes_the_timeout_to_the_core() -> None:
     assert build_core(CoreConfig(mode="embedded", timeout_seconds=12.5))._timeout_seconds == 12.5
     assert build_core(CoreConfig(mode="http", target="http://127.0.0.1:9100/mcp",
                                  timeout_seconds=30.0))._timeout_seconds == 30.0
+
+
+class _FlakySessionCore(_SessionCore):
+    """第一次建连失败、第二次成功的会话核心。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.sessions = 0
+
+    async def _make_client(self) -> Any:
+        self.sessions += 1
+        if self.sessions == 1:
+            raise ConnectionRefusedError("核心暂时不可达")
+        return _FakeSessionClient()
+
+
+def test_failed_session_is_reset_so_the_next_call_can_reconnect() -> None:
+    """首次建连失败后必须能重连，而不是永远复用一个失败的任务。"""
+    core = _FlakySessionCore()
+
+    async def scenario() -> None:
+        with pytest.raises(CoreUnavailableError):
+            await core.call_tool("get_gateway_capabilities", {})
+        result = await core.call_tool("get_gateway_capabilities", {})
+        assert result["status"] == "SUCCESS"
+        await core.aclose()
+
+    asyncio.run(scenario())
+    assert core.sessions == 2

@@ -165,6 +165,26 @@ def test_capabilities_describe_the_bridge_and_its_core() -> None:
     assert product["bridge"]["endpoint"].endswith("/mcp")
 
 
+def test_capabilities_do_not_leak_core_credentials() -> None:
+    """能力接口把核心描述发给任意已鉴权客户端，不能夹带核心的凭据。"""
+    core = _RecordingCore()
+    config = BridgeConfig(core=CoreConfig(
+        mode="http", target="https://alice:hunter2@core.internal/mcp?token=abc123",
+    ))
+    server = build_bridge_server(core, config=config)
+    captured: dict[str, Any] = {}
+
+    async def scenario() -> None:
+        async with Client(server) as client:
+            result = await client.call_tool("get_gateway_capabilities")
+            captured["product"] = result.structured_content["product"]
+
+    asyncio.run(scenario())
+    text = str(captured["product"])
+    assert "hunter2" not in text
+    assert "abc123" not in text
+
+
 def test_core_failure_becomes_a_controlled_envelope() -> None:
     core = _RecordingCore(fail=True)
     server = build_bridge_server(core, config=_config())

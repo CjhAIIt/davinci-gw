@@ -26,7 +26,34 @@ def test_loopback_detection_covers_names_and_addresses() -> None:
 def test_non_loopback_host_requires_explicit_opt_in() -> None:
     with pytest.raises(BridgeConfigError):
         BridgeConfig(host="0.0.0.0").validate()
-    BridgeConfig(host="0.0.0.0", allow_remote=True).validate()
+    # 显式允许对外监听还不够：明文监听必须再显式声明或启用 TLS。
+    with pytest.raises(BridgeConfigError):
+        BridgeConfig(host="0.0.0.0", allow_remote=True).validate()
+    BridgeConfig(host="0.0.0.0", allow_remote=True, allow_remote_insecure=True).validate()
+
+
+def test_remote_listener_requires_tls_unless_tunnel_is_declared() -> None:
+    """对外监听必须加密：令牌与路由结果不能明文跨主机传输。"""
+    with pytest.raises(BridgeConfigError):
+        BridgeConfig(host="192.168.1.10", allow_remote=True).validate()
+    with pytest.raises(BridgeConfigError):
+        BridgeConfig(host="192.168.1.10", allow_remote=True, tls_certfile="cert.pem").validate()
+    BridgeConfig(
+        host="192.168.1.10", allow_remote=True, tls_certfile="cert.pem", tls_keyfile="key.pem",
+    ).validate()
+    BridgeConfig(
+        host="192.168.1.10", allow_remote=True, allow_remote_insecure=True,
+    ).validate()
+
+
+def test_remote_listener_advertises_https_when_tls_is_enabled() -> None:
+    config = BridgeConfig(
+        host="192.168.1.10", allow_remote=True, tls_certfile="cert.pem", tls_keyfile="key.pem",
+    )
+    assert config.tls_enabled
+    assert config.url_for().startswith("https://192.168.1.10:8765/mcp")
+    # 回环监听不受远端策略影响，仍是明文本地端口。
+    assert BridgeConfig().url_for().startswith("http://")
 
 
 def test_invalid_port_and_path_are_rejected() -> None:
@@ -68,6 +95,32 @@ def test_core_description_never_leaks_the_token() -> None:
     described = CoreConfig(mode="http", target="http://127.0.0.1:9100/mcp", token="secret").describe()
     assert "secret" not in str(described)
     assert described["mode"] == "http"
+
+
+def test_core_description_redacts_credentials_in_the_target() -> None:
+    """核心目标里的账号密码不能随能力接口泄露给 Bridge 客户端。"""
+    described = CoreConfig(
+        mode="http", target="https://alice:hunter2@core.internal/mcp?token=abc123&mode=fast",
+    ).describe()
+    text = str(described)
+    assert "hunter2" not in text
+    assert "abc123" not in text
+    assert "alice" in text
+    assert "core.internal" in text
+    assert "mode=fast" in text
+
+
+def test_core_description_redacts_credentials_in_arguments() -> None:
+    """核心命令行参数里的令牌不能随能力接口泄露。"""
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe",
+        args=("--token", "abc123", "--api-key=def456", "--mode", "fast"),
+    ).describe()
+    text = str(described)
+    assert "abc123" not in text
+    assert "def456" not in text
+    assert "--mode" in text
+    assert "fast" in text
 
 
 def test_url_for_formats_ipv6_hosts() -> None:

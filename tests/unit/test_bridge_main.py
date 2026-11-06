@@ -23,6 +23,19 @@ def test_missing_core_target_is_rejected(capsys: object) -> None:
     assert main(["--core", "http"]) == 2
 
 
+def test_remote_listener_without_tls_is_rejected(capsys: object) -> None:
+    """对外监听必须加密，命令行层也要拦住明文远端。"""
+    assert main([
+        "--core", "stdio", "--core-target", "davinci-gw-mcp.exe",
+        "--host", "0.0.0.0", "--allow-remote",
+    ]) == 2
+    # 只给证书不给私钥同样不成立。
+    assert main([
+        "--core", "stdio", "--core-target", "davinci-gw-mcp.exe",
+        "--host", "0.0.0.0", "--allow-remote", "--tls-certfile", "cert.pem",
+    ]) == 2
+
+
 def test_descriptor_file_is_written_for_client_discovery(tmp_path: Path) -> None:
     path = tmp_path / "bridge.json"
     _write_descriptor(path, {"url": "http://127.0.0.1:8765/mcp", "token": "t"})
