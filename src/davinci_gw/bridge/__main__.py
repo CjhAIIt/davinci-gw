@@ -28,6 +28,9 @@ LOGGER = logging.getLogger("davinci_gw.bridge")
 
 DEFAULT_DESCRIPTOR_NAME = "bridge.json"
 
+# 服务收尾的时限（秒）：发现文件写不出去时不能无限期挂住。
+SHUTDOWN_TIMEOUT_SECONDS = 10.0
+
 
 def _split_command(command: str) -> tuple[str, list[str]]:
     """把整串命令行拆成可执行文件与参数，保留 Windows 路径中的反斜杠。"""
@@ -237,13 +240,17 @@ def _write_descriptor(path: Path, descriptor: dict[str, object]) -> None:
     ``write_text`` 会让文件先按父目录继承的权限落盘，写入与收紧之间
     存在一个明文令牌可被其它本地账号读取的窗口。
 
-    Windows 上采用"受限临时文件 + 原子替换"：先把内容写进同目录下的
-    临时文件并把它的权限收紧，再 ``os.replace`` 换到目标路径。
-    收紧动作只作用在**临时文件**上，目标文件的访问控制表在整个过程
-    里原封不动——既有发现文件已经被收紧过时，再对它执行 ``icacls``
-    会短暂出现"谁都没有权限"的空窗，客户端在这个窗口里读文件会拿到
-    ``PermissionError``；而先删后建则会在客户端正持有文件句柄时
-    删不掉（``WinError 32``）。原子替换两条路都绕开了。
+    因此顺序固定为"先建空文件 → 收紧权限 → 写入内容"。收紧发生在
+    内容写入之前，磁盘上任何时刻都不存在"已带明文、但还没收紧"的
+    文件。这条在 Windows 与 POSIX 上都成立。
+
+    Windows 上采用"受限临时文件 + 原子替换"：在同目录建一个空临时
+    文件，先把它的访问控制表收紧，再写入内容，最后 ``os.replace``
+    换到目标路径。收紧动作只作用在**临时文件**上，目标文件的访问
+    控制表在整个过程里原封不动——既有发现文件已经被收紧过时，再对
+    它执行 ``icacls`` 会短暂出现"谁都没有权限"的空窗，客户端在这个
+    窗口里读文件会拿到 ``PermissionError``；而先删后建则会在客户端
+    正持有文件句柄时删不掉（``WinError 32``）。原子替换两条路都绕开了。
 
     ``os.replace`` 在同目录内是原子的，客户端读到的要么是旧文件、
     要么是完整的受限新文件，不会读到写了一半的内容。
@@ -259,8 +266,12 @@ def _write_descriptor(path: Path, descriptor: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     content = json.dumps(descriptor, ensure_ascii=False, indent=2)
     if os.name != "nt":
-        path.write_text(content, encoding="utf-8")
+        # POSIX：先以 owner-only 权限把文件建出来，再写入内容。
+        # os.open 的 mode 只作用于新建文件，已存在的文件要另外 chmod。
+        handle = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.close(handle)
         _restrict_descriptor_permissions(path)
+        path.write_text(content, encoding="utf-8")
         return
     temporary = path.with_name(path.name + ".tmp")
     try:
@@ -269,9 +280,12 @@ def _write_descriptor(path: Path, descriptor: dict[str, object]) -> None:
     except OSError:  # pragma: no cover - 残留临时文件删不掉时覆盖写入
         pass
     try:
-        temporary.write_text(content, encoding="utf-8")
+        # 先建空文件并收紧，再写入内容：明文令牌落盘时文件已经是
+        # owner-only，不存在"已落盘但未收紧"的窗口。
+        temporary.touch(exist_ok=True)
         _restrict_descriptor_permissions(temporary)
-    except OSError as exc:
+        temporary.write_text(content, encoding="utf-8")
+    except (OSError, BridgeConfigError) as exc:
         raise BridgeConfigError(
             f"无法写入客户端发现文件 {path}：{exc}"
         ) from exc
@@ -326,7 +340,28 @@ def _replace_with_retry(temporary: Path, path: Path, attempts: int = 20) -> None
     ) from last_error
 
 
-async def _serve(config: BridgeConfig, log_level: str) -> None:
+async def _shutdown(uvicorn_server: Any, task: asyncio.Task[None]) -> None:
+    """让已监听的 Uvicorn 服务收尾，释放端口。
+
+    收尾失败或超时都不能盖掉真正的错误原因，因此这里只记日志：
+    端口会随进程退出一起释放。
+    """
+    uvicorn_server.should_exit = True
+    try:
+        await asyncio.wait_for(task, timeout=SHUTDOWN_TIMEOUT_SECONDS)
+    except (TimeoutError, asyncio.TimeoutError):  # pragma: no cover - 极端情况下的兜底
+        LOGGER.error("bridge shutdown timed out")
+    except Exception as exc:  # pragma: no cover - 收尾期异常不影响退出码
+        LOGGER.error("bridge shutdown failed error_type=%s", type(exc).__name__)
+
+
+async def _serve(config: BridgeConfig, log_level: str) -> int:
+    """启动桥接服务并阻塞运行；返回进程退出码。
+
+    发现文件写不出去时返回 2（配置错误），而不是抛异常让进程带着
+    一段 traceback 退出：端口已经监起来了，客户端却拿不到令牌，
+    这种半启动状态对使用者毫无意义。
+    """
     import uvicorn
 
     core = build_core(config.core)
@@ -368,16 +403,20 @@ async def _serve(config: BridgeConfig, log_level: str) -> None:
         if config.descriptor_path is not None:
             try:
                 _write_descriptor(config.descriptor_path, descriptor)
-            except OSError as exc:
+            except (OSError, BridgeConfigError) as exc:
                 # 端口已经监起来了，发现文件却写不出去：客户端拿不到令牌，
                 # 留着服务只会让人以为能用。明确报错并退出。
+                # _write_descriptor 的失败路径抛的是 BridgeConfigError
+                # （ValueError 的子类），不是 OSError——只捕 OSError 会漏掉
+                # 它，进程会带着一段 traceback 退出，而不是干净地报配置错误。
                 uvicorn_server.should_exit = True
                 print(
                     f"桥接配置错误：无法写入客户端发现文件 {config.descriptor_path}：{exc}",
                     file=sys.stderr,
                     flush=True,
                 )
-                return
+                await _shutdown(uvicorn_server, task)
+                return 2
         print(f"桥接服务已就绪：{descriptor['url']}", flush=True)
         if config.descriptor_path is not None:
             print(f"客户端发现文件：{config.descriptor_path}", flush=True)
@@ -395,6 +434,7 @@ async def _serve(config: BridgeConfig, log_level: str) -> None:
                 flush=True,
             )
         await task
+        return 0
     finally:
         await core.aclose()
 
@@ -459,10 +499,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"桥接配置错误：{exc}", file=sys.stderr)
         return 2
     try:
-        asyncio.run(_serve(config, args.log_level))
+        return asyncio.run(_serve(config, args.log_level))
     except KeyboardInterrupt:  # pragma: no cover - 交互式退出
         return 130
-    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover
