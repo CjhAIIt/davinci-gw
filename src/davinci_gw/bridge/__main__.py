@@ -117,13 +117,21 @@ def _restrict_descriptor_permissions(path: Path) -> None:
 
     ``os.chmod(path, 0o600)`` 在 Windows 上只改只读属性，不建立
     owner-only 的 DACL——实测改完之后文件仍是 0o666，ACL 里其它用户
-    照样能读。Windows 上改为用 ``icacls`` 重建访问控制表：先给当前
-    用户显式授权，再去掉继承项，最后把别人残留的显式授权逐条移除，
-    只留当前用户一条完全控制。
+    照样能读。Windows 上改为用 ``icacls`` 重建访问控制表，三步走：
+
+    1. ``/reset``：把访问控制表重置为父目录的默认继承项，
+       文件上**已有**的显式授权（例如 ``Everyone:(R)``）一并清掉；
+    2. ``/inheritance:r``：把继承项摘掉，剩下空表；
+    3. ``/grant:r *SID:(F)``：只给当前用户一条完全控制。
 
     只做 ``icacls /grant:r`` 与 ``/inheritance:r`` 是不够的：那两步
     只替换当前用户的授权并去掉继承项，文件上**已有**的显式授权
-    （例如 ``Everyone:(R)``）会原样留下，别的账号照样能读到令牌。
+    会原样留下，别的账号照样能读到令牌。
+
+    这里刻意**不解析** ``icacls`` 的文本输出去逐条摘授权：输出是
+    本地代码页，长路径或中文路径下会乱码并折行，按行切分会把
+    续行误当成一个主体，``/remove:g`` 就会失败，fail-closed 之下
+    Bridge 反而起不来。``/reset`` 不需要知道其它主体是谁。
 
     顺序上必须先授权再去继承：``/inheritance:r`` 会把继承项从
     访问控制表里摘掉，如果此时当前用户还没有显式授权，文件会短暂
@@ -151,18 +159,13 @@ def _restrict_descriptor_permissions(path: Path) -> None:
     if not sid.upper().startswith("S-1-"):
         # 取不到 SID 就无法精确授权；授权给用户名可能命中域内同名账户。
         raise BridgeConfigError("无法确定当前用户的 SID，不能安全地限制发现文件的访问控制表。")
+    # 先重置为默认继承项：这一步会把文件上已有的显式授权一并清掉。
+    _run_icacls(path, "/reset")
+    # 再把继承项摘掉，访问控制表变成空的（谁都没有权限）。
+    _run_icacls(path, "/inheritance:r")
+    # 最后只给当前用户一条完全控制。
     # 授权项必须写成 *SID：icacls 把不带 * 的 "S-1-…" 当账户名解析，
     # 会报 "No mapping between account names and security IDs"。
-    # 先显式授满当前用户：此后任何时刻当前用户都有权限。
-    _run_icacls(path, "/grant:r", f"*{sid}:(F)")
-    # 去掉继承项。当前用户已经有显式授权，去掉继承不会让他失去权限。
-    _run_icacls(path, "/inheritance:r")
-    # 再把别人残留的显式授权逐条摘掉（继承项已经摘干净，这里只剩显式项）。
-    for principal, is_deny in _explicit_acl_principals(path):
-        if _is_current_user_principal(principal):
-            continue
-        _run_icacls(path, "/remove:d" if is_deny else "/remove:g", principal)
-    # 收尾再确认一次当前用户的授权仍在。
     _run_icacls(path, "/grant:r", f"*{sid}:(F)")
 
 
@@ -184,89 +187,6 @@ def _run_icacls(path: Path, *arguments: str) -> None:
             "无法收紧发现文件的访问控制表，发现文件可能对其它本地账号可读："
             + (completed.stdout + completed.stderr).strip()[-300:]
         )
-
-
-def _explicit_acl_principals(path: Path) -> list[tuple[str, bool]]:
-    """列出文件上显式授权的主体（继承项不算），返回 (主体, 是否拒绝项)。"""
-    import subprocess
-
-    try:
-        completed = subprocess.run(
-            ["icacls", str(path)], capture_output=True, timeout=30,
-            text=True, encoding="utf-8", errors="replace",
-        )
-    except (OSError, subprocess.SubprocessError):  # pragma: no cover - 取决于系统环境
-        return []
-    principals: list[tuple[str, bool]] = []
-    for line in completed.stdout.splitlines():
-        line = line.strip()
-        if not line or "Successfully processed" in line:
-            continue
-        # 每行形如 "C:\path\file USER:(F)"，权限部分跟在路径后面。
-        parts = line.split(str(path), 1)
-        entry = parts[1].strip() if len(parts) > 1 else line
-        if not entry or "(I)" in entry:
-            # 继承项由 /inheritance:r 统一摘掉，这里不重复处理。
-            continue
-        principal, separator, permissions = entry.rpartition(":")
-        if not separator:
-            continue
-        principal = principal.strip()
-        if not principal:
-            continue
-        principals.append((principal, "DENY" in permissions.upper()))
-    return principals
-
-
-def _is_current_user_principal(principal: str) -> bool:
-    """判断访问控制表里的一个主体是不是当前用户。
-
-    ``icacls`` 输出的是账户名（形如 ``DESKTOP-BA8OBJV\\cjh``），
-    而 ``getpass.getuser()`` 只给裸用户名（``cjh``）——两者直接比较
-    必然不相等，于是程序会把自己的授权也当成"别人的"摘掉，文件
-    在那一瞬间变成谁都没有权限，读写都撞 ``PermissionError``。
-
-    这里把当前用户的各种可能写法都列出来比较：完整 SID、域限定名、
-    裸用户名；``whoami`` 的输出同样一并纳入。
-    """
-    if not principal:
-        return False
-    candidates = {principal.strip(), principal.strip().upper()}
-    sid = _current_user_sid()
-    if sid:
-        candidates.add(sid.upper())
-        candidates.add(f"*{sid.upper()}")
-    user = _current_user_name()
-    if user:
-        candidates.add(user.upper())
-        candidates.add(user.split("\\")[-1].upper())
-    domain = os.environ.get("USERDOMAIN", "")
-    if domain and user:
-        candidates.add(f"{domain}\\{user}".upper())
-    try:
-        import subprocess
-
-        completed = subprocess.run(
-            ["whoami"], capture_output=True, timeout=30, text=True,
-            encoding="utf-8", errors="replace",
-        )
-        account = completed.stdout.strip()
-        if account:
-            candidates.add(account.upper())
-            candidates.add(account.split("\\")[-1].upper())
-    except (OSError, subprocess.SubprocessError):  # pragma: no cover - 取决于系统环境
-        pass
-    return any(candidate in candidates for candidate in candidates if candidate)
-
-
-def _current_user_name() -> str:
-    """取当前用户的裸用户名，用于跳过自己的授权项。"""
-    import getpass
-
-    try:
-        return getpass.getuser()
-    except OSError:  # pragma: no cover - 取不到用户名时
-        return ""
 
 
 def _current_user_sid() -> str:

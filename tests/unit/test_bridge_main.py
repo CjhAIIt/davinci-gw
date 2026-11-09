@@ -178,6 +178,34 @@ def test_descriptor_acl_drops_preexisting_explicit_grants(tmp_path: Path) -> Non
     assert json.loads(path.read_text(encoding="utf-8"))["token"] == "t"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL 语义")
+def test_descriptor_acl_is_rebuilt_for_long_non_ascii_paths(tmp_path: Path) -> None:
+    """长中文路径下也必须能收紧，已有的显式授权要一并清掉。
+
+    ``icacls`` 的输出走本地代码页，路径一长或含中文就会乱码并折行；
+    「读输出、逐条摘授权」的做法会把折行续行误当成一个主体，
+    ``/remove:g`` 随之失败，fail-closed 之下 Bridge 反而起不来。
+    收紧流程不能依赖解析 icacls 的文本输出。
+    """
+    directory = tmp_path / ("长目录名称" * 6)
+    directory.mkdir(parents=True)
+    path = directory / ("发现文件" + "x" * 30 + ".json")
+    path.write_text("{}", encoding="utf-8")
+    granted = subprocess.run(
+        ["icacls", str(path), "/grant", "Everyone:(R)"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+    )
+    assert granted.returncode == 0, granted.stdout + granted.stderr
+
+    _write_descriptor(path, {"url": "http://127.0.0.1:8765/mcp", "token": "t"})
+
+    acl = _acl_entries(path)
+    assert len(acl) == 1, acl
+    assert not any("Everyone" in entry for entry in acl), acl
+    assert not any("(I)" in entry for entry in acl), acl
+    assert json.loads(path.read_text(encoding="utf-8"))["token"] == "t"
+
+
 def _acl_entries(path: Path) -> list[str]:
     """读出文件的访问控制表条目（去掉路径前缀与空行）。"""
     completed = subprocess.run(
