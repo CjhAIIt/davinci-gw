@@ -310,6 +310,25 @@ def test_changed_paths_guard_allows_ordinary_source_changes(porcelain: str) -> N
     assert not forbidden, forbidden
 
 
+@pytest.mark.parametrize("porcelain,tracked,blocked", [
+    # 产物目录里被仓库跟踪的说明文档不是构建产物，不该被拦下。
+    (" M release/README.md\n", ["release/README.md"], False),
+    # 没有跟踪清单时按最严口径处理（取不到 HEAD 的退路）。
+    (" M release/README.md\n", [], True),
+    # 真正的构建产物都是未跟踪的新文件，照旧拦下。
+    (" M release/davinci-gw-mcp-1.3.6-win-x64/davinci-gw-mcp.exe\n", ["release/README.md"], True),
+    (" M Release/davinci-gw-mcp-1.3.6-win-x64/x.exe\n", ["release/README.md"], True),
+    (" M input/notes.md\n", ["release/README.md"], True),
+])
+def test_changed_paths_guard_distinguishes_tracked_files_from_artifacts(
+    porcelain: str, tracked: list[str], blocked: bool,
+) -> None:
+    """产物目录要按「仓库跟踪没跟踪」区分：说明文档放行，构建产物拦下。"""
+    changed, forbidden = _changed_and_forbidden_paths(porcelain, tracked)
+    assert changed
+    assert bool(forbidden) is blocked, forbidden
+
+
 def _awaiting_submission(tmp_path: Path) -> tuple[RepairCoordinator, RepairRecord]:
     """构造一个等待提交的修复现场，跳过真实修复流程。"""
     config, baseline, repository, python = _inputs(tmp_path)
@@ -348,6 +367,42 @@ def test_submit_refuses_changes_touching_customer_inputs(
     ))
     assert result.state is RepairState.NEEDS_ATTENTION
     assert "禁止提交" in (result.error or "")
+
+
+def test_submit_allows_a_tracked_release_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """产物目录里被仓库跟踪的说明文档要能正常提交。
+
+    仓库跟踪的 ``release/README.md`` 是发布说明，不是构建产物；关卡按
+    「目录里是不是仓库本来就有的文件」区分，不能把它和产物一起拦下。
+    """
+    coordinator, record = _awaiting_submission(tmp_path)
+
+    async def fake_run(*args: str, **kwargs: object) -> str:
+        if args[:3] == ("git", "status", "--porcelain"):
+            return " M release/README.md\n"
+        if args[:2] == ("git", "ls-tree"):
+            return "release/README.md\nsrc/fix.py\n"
+        if "build_mcp_release.ps1" in " ".join(args):
+            from davinci_gw.mcp.version import MCP_VERSION
+
+            cwd = Path(str(kwargs.get("cwd")))
+            archive = cwd / "release" / f"davinci-gw-mcp-{MCP_VERSION}-win-x64.zip"
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            archive.write_bytes(b"zip")
+            executable = cwd / "dist" / "mcp" / "davinci-gw-mcp" / "davinci-gw-mcp.exe"
+            executable.parent.mkdir(parents=True, exist_ok=True)
+            executable.write_bytes(b"exe")
+            return "构建成功"
+        return ""
+
+    monkeypatch.setattr("davinci_gw.mcp.repair_service._run", fake_run)
+    result = asyncio.run(coordinator.submit(
+        record.repair_id, SUBMIT_CONFIRMATION, "LOCAL_COMMIT", "docs(release): 更新发布说明", "origin",
+    ))
+    assert result.state is RepairState.COMPLETED
+    assert result.submission == {"mode": "LOCAL_COMMIT"}
 
 
 def test_cancel_requires_confirmation_and_preserves_session(tmp_path: Path) -> None:

@@ -40,27 +40,38 @@ _INPUT_PREFIXES = (
 )
 #: 禁止提交的顶层目录（仓库相对路径，小写）。Windows 的文件系统不区分大小写，
 #: ``Input/`` 与 ``input/`` 是同一个目录，所以比较时必须忽略大小写。
-_FORBIDDEN_DIRECTORIES = ("input/", "release/")
+_FORBIDDEN_INPUT_DIRECTORY = "input/"
+#: 构建产物目录。仓库跟踪的只有 ``release/README.md``（说明文档），不是产物；
+#: 真正的产物都是未跟踪的新文件，照旧拦下。
+_FORBIDDEN_ARTIFACT_DIRECTORY = "release/"
 
 
-def _changed_and_forbidden_paths(porcelain: str) -> tuple[list[str], list[str]]:
+def _changed_and_forbidden_paths(
+    porcelain: str, tracked: Sequence[str] = (),
+) -> tuple[list[str], list[str]]:
     """从 ``git status --porcelain`` 的输出里分出改动清单与禁止提交的改动。
 
     这是修复代理唯一的上线闸门：客户输入、构建产物和凭据文件一旦混进
     提交，就会被推到 fork 或直接发布到维护者仓库。判定必须按 Windows 的
     实际语义来——文件系统不区分大小写，凭据文件也不止 ``.env`` 一个名字。
+
+    ``tracked`` 是仓库 HEAD 里已经跟踪的文件。产物目录里被跟踪的只有说明
+    文档（``release/README.md``），它不是构建产物，不该被拦下；构建产物
+    本身都是未跟踪的新文件，照旧拦下。
     """
     changed: list[str] = []
     for line in porcelain.splitlines():
         if len(line) >= 4:
             changed.append(line[3:].split(" -> ")[-1].strip('"'))
+    tracked_keys = {name.replace("\\", "/").casefold() for name in tracked}
     forbidden: list[str] = []
     for name in changed:
         lowered = name.replace("\\", "/").casefold()
         if (
             Path(name).suffix.casefold() in _FORBIDDEN_SUFFIXES
             or Path(name).name.casefold().startswith(".env")
-            or lowered.startswith(_FORBIDDEN_DIRECTORIES)
+            or lowered.startswith(_FORBIDDEN_INPUT_DIRECTORY)
+            or (lowered.startswith(_FORBIDDEN_ARTIFACT_DIRECTORY) and lowered not in tracked_keys)
         ):
             forbidden.append(name)
     return changed, forbidden
@@ -393,7 +404,14 @@ class RepairCoordinator:
 
     async def _validate_changed_paths(self, record: RepairRecord) -> None:
         names = await _run("git", "status", "--porcelain", cwd=record.worktree_path)
-        changed, forbidden = _changed_and_forbidden_paths(names)
+        try:
+            tracked_output = await _run(
+                "git", "ls-tree", "-r", "--name-only", "HEAD", cwd=record.worktree_path,
+            )
+        except RepairContractError:
+            # 取不到已跟踪清单就按最严口径处理：产物目录里的新文件一律拦下。
+            tracked_output = ""
+        changed, forbidden = _changed_and_forbidden_paths(names, tracked_output.splitlines())
         if not changed:
             raise RepairContractError("修复代理没有产生代码或测试改动。")
         if forbidden:
