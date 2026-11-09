@@ -396,9 +396,10 @@ class ElidedLabel(QLabel):
     这里让标签可以缩到 0 宽，被截断的部分用省略号表示。
     """
 
-    def __init__(self, text: str = "", parent=None) -> None:
+    def __init__(self, text: str = "", parent=None, minimum_width: int = 0) -> None:
         super().__init__(parent)
         self._full_text = text
+        self._minimum_width = max(int(minimum_width), 0)
         # Preferred 而不是 Ignored：Ignored 会让布局连首选宽度都不给，
         # 标题会被压成 0 宽而整条消失。Preferred 仍然按原文宽度排，
         # 空间不够时才缩到最小宽度 0 并用省略号表示截断。
@@ -406,13 +407,26 @@ class ElidedLabel(QLabel):
         super().setText(text)
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
-        """最小宽度为 0：不让整段文字撑宽所在行。
+        """最小宽度：不让整段文字撑宽所在行。
 
         QLabel 的最小宽度就是文字本身的宽度，窄窗口下会把整行撑宽，
         右栏因此出现横向滚动条。这里让行可以收缩，截断部分用省略号表示。
+        `minimum_width` 给一个下限，免得标签被挤成只剩一个省略号。
         """
         base = super().minimumSizeHint()
-        return QSize(0, base.height())
+        return QSize(self._minimum_width, base.height())
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        """首选宽度按**原文**算，而不是按省略后的文本算。
+
+        省略后的文本一旦成了首选宽度，布局就会按这个更小的宽度重新分配，
+        标签被永远锁在省略状态：文案变长后不再恢复，窗口拉宽也恢复不了
+        （实测「等待输入」换成「预览通过，可以生成」后标题一直停在「预览通过，…」）。
+        """
+        base = super().sizeHint()
+        metrics = self.fontMetrics()
+        full = metrics.horizontalAdvance(self._full_text)
+        return QSize(max(int(full), 0), base.height())
 
     def setText(self, text: str) -> None:  # noqa: N802
         self._full_text = text
@@ -457,16 +471,18 @@ class StatusBanner(QFrame):
         self.title.setObjectName("statusTitle")
         layout.addWidget(self.title, 0, Qt.AlignVCenter)
 
-        self.detail = ElidedLabel()
+        self.detail = ElidedLabel(minimum_width=96)
         self.detail.setObjectName("statusDetail")
         layout.addWidget(self.detail, 1, Qt.AlignVCenter)
 
         self._crumbs: list[QLabel] = []
+        self._separators: list[QLabel] = []
         for idx, text in enumerate(self.STEP_NAMES):
             if idx > 0:
                 sep = QLabel("/")
                 sep.setObjectName("stepCrumbSep")
                 layout.addWidget(sep, 0, Qt.AlignVCenter)
+                self._separators.append(sep)
             crumb = QLabel(text)
             crumb.setObjectName("stepCrumb")
             crumb.setProperty("active", "false")
@@ -481,6 +497,26 @@ class StatusBanner(QFrame):
         self.set_message("等待输入")
         self.set_step(1, 3)
 
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._sync_step_counter()
+
+    def _sync_step_counter(self) -> None:
+        """宽度不够时收起 STEP 徽标，把空间让给状态标题与说明。
+
+        徽标写的是「STEP 2 / 3」，而面包屑里高亮的那一步说的是同一件事——
+        窄窗口下两者只能留一个，状态文案比进度徽标更要紧。
+        """
+        margins = self.contentsMargins()
+        inner = max(self.width() - margins.left() - margins.right(), 0)
+        fixed = self.rail.width() + sum(c.width() for c in self._crumbs)
+        fixed += sum(s.width() for s in self._separators)
+        spacing = self.layout().spacing() * (len(self._crumbs) + len(self._separators) + 3)
+        needed = fixed + spacing + self.title.sizeHint().width() + self.detail.sizeHint().width()
+        counter_width = self.counter.sizeHint().width()
+        # 判定只看宽度，与徽标当前可见与否无关，因此不会出现收起又弹出的抖动。
+        self.counter.setVisible(inner >= needed + counter_width)
+
     def set_state(self, state: str) -> None:
         """切换状态配色：neutral / info / success / warning / error。"""
         for widget in (self, self.rail):
@@ -493,6 +529,8 @@ class StatusBanner(QFrame):
         self.title.setText(title)
         self.detail.setText(f"— {detail}" if detail and not detail.startswith("—") else detail)
         self.detail.setVisible(bool(detail))
+        # 文案变了但横幅宽度没变，resizeEvent 不会来，这里自己同步一次。
+        self._sync_step_counter()
 
     def set_step(self, current: int, total: int) -> None:
         """更新流水线步骤面包屑与 STEP 指示。"""
@@ -501,6 +539,7 @@ class StatusBanner(QFrame):
             crumb.setProperty("active", "true" if idx == current else "false")
             crumb.style().unpolish(crumb)
             crumb.style().polish(crumb)
+        self._sync_step_counter()
 
 
 class FileSlot(QFrame):

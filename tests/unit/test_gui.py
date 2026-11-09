@@ -362,6 +362,57 @@ def test_status_banner_minimum_width_does_not_grow_with_the_message(qtbot) -> No
     assert short <= 560, f"状态条最小宽度 {short} 仍然过宽"
 
 
+def test_status_banner_title_is_not_stuck_elided_after_a_longer_message(qtbot) -> None:
+    """状态标题换成长文案后不能被永久锁在省略状态。
+
+    省略后的文本一旦成了首选宽度，布局就会按这个更小的宽度重新分配，
+    标签再也回不去：文案变长后不恢复，窗口拉宽也不恢复。
+    """
+    runner = _FakeRunner()
+    view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DontShowOnScreen, True)
+    window.resize(1240, 700)
+    window.show()
+    qtbot.wait(50)
+
+    banner = window.status_banner
+    banner.set_message("等待输入", "")
+    qtbot.wait(20)
+    banner.set_message("预览通过，可以生成", "8 项警告或保留决定待确认")
+    qtbot.wait(50)
+
+    assert banner.title.text() == "预览通过，可以生成", (
+        f"标题被锁在省略状态：{banner.title.text()!r}"
+    )
+
+
+def test_status_banner_hides_the_step_counter_when_space_is_tight(qtbot) -> None:
+    """空间不够时收起 STEP 徽标，宽了再放出来。
+
+    徽标写的是「STEP 2 / 3」，面包屑里高亮的那一步说的是同一件事；
+    窄窗口下两者只能留一个，状态文案更要紧。
+    """
+    runner = _FakeRunner()
+    view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+    window.setAttribute(Qt.WA_DontShowOnScreen, True)
+    window.resize(1240, 700)
+    window.show()
+    qtbot.wait(50)
+
+    banner = window.status_banner
+    banner.set_message("所有校验项已确认，可生成 ARXML", "点击左侧「生成 ARXML」输出最终工程文件")
+    qtbot.wait(50)
+    assert not banner.counter.isVisible(), "最窄窗口下 STEP 徽标没有收起"
+
+    window.resize(1440, 900)
+    qtbot.wait(50)
+    assert banner.counter.isVisible(), "窗口变宽后 STEP 徽标没有回来"
+
+
 def test_elided_label_keeps_minimum_width_zero_and_marks_truncation(qtbot) -> None:
     """省略标签：最小宽度为 0，放不下时用省略号标记截断，原文仍可取回。"""
     from UI.components import ElidedLabel
@@ -380,6 +431,8 @@ def test_elided_label_keeps_minimum_width_zero_and_marks_truncation(qtbot) -> No
     assert label.text() != label.fullText()
     assert label.text().endswith("…")
     assert label.fullText() == "一段很长的状态说明文字，用来撑破最小宽度"
+    # 首选宽度按原文算：否则布局会按省略后的宽度分配，标签再也回不去。
+    assert label.sizeHint().width() >= label.fontMetrics().horizontalAdvance(label.fullText())
 
 
 def test_search_box_still_filters_the_issue_table(qtbot) -> None:
