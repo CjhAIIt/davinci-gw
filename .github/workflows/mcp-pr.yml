@@ -2,6 +2,9 @@ name: MCP PR 验证
 
 on:
   pull_request:
+  # 外部贡献者的 PR 需要维护者批准才能跑起自动检查；
+  # 留一个手动入口，任何时候都能在任意分支上直接验证同一套流程。
+  workflow_dispatch:
 
 permissions:
   contents: read
