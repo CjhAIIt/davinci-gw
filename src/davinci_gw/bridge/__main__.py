@@ -324,6 +324,10 @@ def _write_descriptor(path: Path, descriptor: dict[str, object]) -> None:
     唯一例外是目标文件正被客户端独占打开：Windows 的 rename 要求
     目标没有打开的句柄，此时替换会报 ``WinError 5``。这种情况
     重试一小段时间即可——客户端读完就关闭句柄，通常只是几十毫秒。
+
+    目标文件带只读属性时替换同样会失败（``WinError 5``），替换前
+    先把只读属性去掉：发现文件由程序自己维护，用户手动设的只读
+    不该让 Bridge 起不来。
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     content = json.dumps(descriptor, ensure_ascii=False, indent=2)
@@ -345,6 +349,7 @@ def _write_descriptor(path: Path, descriptor: dict[str, object]) -> None:
             f"无法写入客户端发现文件 {path}：{exc}"
         ) from exc
     try:
+        _clear_readonly_attribute(path)
         _replace_with_retry(temporary, path)
     finally:
         try:
@@ -352,6 +357,21 @@ def _write_descriptor(path: Path, descriptor: dict[str, object]) -> None:
                 temporary.unlink()
         except OSError:  # pragma: no cover - 清理失败不影响主流程
             pass
+
+
+def _clear_readonly_attribute(path: Path) -> None:
+    """去掉目标文件上的只读属性。
+
+    Windows 上带只读属性的文件不能被替换（``MoveFileEx`` 报
+    ``WinError 5``）。发现文件由程序自己维护，用户手动设的只读
+    不应该让 Bridge 起不来，因此替换前先清掉它。文件不存在或本来
+    就不是只读时什么都不做。
+    """
+    try:
+        if path.exists() and not os.access(path, os.W_OK):
+            os.chmod(path, 0o666)
+    except OSError:  # pragma: no cover - 清不掉时留给替换阶段报错
+        pass
 
 
 def _replace_with_retry(temporary: Path, path: Path, attempts: int = 20) -> None:

@@ -138,6 +138,21 @@ def test_descriptor_write_succeeds_while_a_client_holds_the_file(tmp_path: Path)
     assert sorted(item.name for item in tmp_path.iterdir()) == ["bridge.json"]
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows 只读属性语义")
+def test_descriptor_write_succeeds_when_the_previous_file_is_read_only(tmp_path: Path) -> None:
+    """上一次留下的发现文件带只读属性时，Bridge 重启仍要能写出新的。
+
+    Windows 上带只读属性的文件不能被替换（``MoveFileEx`` 报
+    ``WinError 5``）。发现文件由程序自己维护，用户手动设的只读
+    不应该让 Bridge 起不来。
+    """
+    path = tmp_path / "bridge.json"
+    _write_descriptor(path, {"url": "http://127.0.0.1:8765/mcp", "token": "first"})
+    os.chmod(path, 0o444)
+    _write_descriptor(path, {"url": "http://127.0.0.1:8765/mcp", "token": "second"})
+    assert json.loads(path.read_text(encoding="utf-8"))["token"] == "second"
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows ACL 语义")
 def test_descriptor_acl_drops_preexisting_explicit_grants(tmp_path: Path) -> None:
     """文件上已有的显式授权也必须被清掉。
