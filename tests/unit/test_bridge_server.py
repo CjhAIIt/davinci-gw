@@ -72,6 +72,37 @@ def test_rejection_drains_the_request_body_before_responding() -> None:
     assert chunks == []
 
 
+def test_rejection_keeps_draining_a_large_request_body() -> None:
+    """请求体超过 1 MiB 时也要读完，不能提前放弃。
+
+    提前停止等于在客户端还在发送时就关闭连接，Windows 会用 RST
+    中断连接，调用方收到的是传输层错误而不是 401——那正是当初
+    要加排空的原因。请求体是被丢弃的，不占内存，真正的上限是时限。
+    """
+    middleware = BearerTokenMiddleware(_PassthroughApp(), "secret")
+    sent: list[dict[str, Any]] = []
+    chunk = b"x" * (256 * 1024)
+    remaining = 8  # 2 MiB，超过原先 1 MiB 的上限
+
+    async def receive() -> dict[str, Any]:
+        nonlocal remaining
+        if remaining <= 0:
+            return {"type": "http.disconnect"}
+        remaining -= 1
+        return {"type": "http.request", "body": chunk, "more_body": True}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    async def scenario() -> None:
+        await middleware({"type": "http", "method": "POST", "path": "/mcp", "headers": []}, receive, send)
+
+    asyncio.run(scenario())
+    assert sent[0]["status"] == 401
+    # 2 MiB 全部排空完，没有因超过 1 MiB 而提前放弃。
+    assert remaining == 0
+
+
 def test_rejection_gives_up_on_a_stalled_request_body(monkeypatch: pytest.MonkeyPatch) -> None:
     """对端发一半 body 就停住时，鉴权拒绝不能一直挂着。
 

@@ -75,8 +75,12 @@ class BearerTokenMiddleware:
         ``receive()`` 永远不会返回，鉴权拒绝也就永远发不出去，
         请求方会把一个 ASGI 任务与套接字一直占住。这里给整体排空
         设一个截止时间，超时后直接放弃剩余请求体并回应 401。
+
+        1 MiB 不是提前放弃的理由：请求体是被丢弃的，不占内存，
+        提前停止反而会让服务端在客户端还在发送时就关闭连接，
+        又回到 Windows 用 RST 中断连接的老问题上。真正的上限是
+        截止时间——异常客户端最多占用这么久。
         """
-        limit = 1 << 20
         deadline = asyncio.get_running_loop().time() + DRAIN_TIMEOUT_SECONDS
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
@@ -89,8 +93,5 @@ class BearerTokenMiddleware:
                 return
             if message["type"] != "http.request":
                 return
-            limit -= len(message.get("body", b""))
             if not message.get("more_body", False):
-                return
-            if limit <= 0:
                 return

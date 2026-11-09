@@ -243,7 +243,18 @@ async def _serve(config: BridgeConfig, log_level: str) -> None:
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
         if config.descriptor_path is not None:
-            _write_descriptor(config.descriptor_path, descriptor)
+            try:
+                _write_descriptor(config.descriptor_path, descriptor)
+            except OSError as exc:
+                # 端口已经监起来了，发现文件却写不出去：客户端拿不到令牌，
+                # 留着服务只会让人以为能用。明确报错并退出。
+                uvicorn_server.should_exit = True
+                print(
+                    f"桥接配置错误：无法写入客户端发现文件 {config.descriptor_path}：{exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return
         print(f"桥接服务已就绪：{descriptor['url']}", flush=True)
         if config.descriptor_path is not None:
             print(f"客户端发现文件：{config.descriptor_path}", flush=True)

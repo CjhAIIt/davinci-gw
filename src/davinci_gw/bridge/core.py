@@ -226,6 +226,9 @@ class _SessionCore:
             # 而不是永远复用一个挂起的会话任务。
             if self._task is session_task:
                 session_task.cancel()
+                # 取消后不等待它结束，但要取出它的异常，
+                # 否则会留下"任务异常从未被取回"的告警。
+                session_task.add_done_callback(_consume_task_result)
                 self._task = None
                 self._ready = None
                 self._stop = None
