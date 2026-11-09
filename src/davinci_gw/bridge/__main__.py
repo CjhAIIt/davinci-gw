@@ -348,6 +348,10 @@ def _startup_failure_message(error: BaseException | None) -> str:
     可读信息，真正的原因（端口被占用之类）藏在它内部的
     ``__cause__`` 里。直接打印 SystemExit 只会得到一个没有意义的
     「3」，因此这里往下一层取真正的原因。
+
+    SystemExit 那条分支目前实际走不到（asyncio 会先终止事件循环，
+    端口占用已由预探测提前拦下），保留它是防御性的：万一将来
+    SDK 改用普通异常，这里也能给出可读说明。
     """
     if error is None:
         return "服务未能启动。"
@@ -451,14 +455,16 @@ async def _serve(config: BridgeConfig, log_level: str) -> int:
     try:
         while not uvicorn_server.started:
             if task.done():
-                # 服务启动阶段就失败了（端口被占用、地址不可绑定等）。
+                # 服务启动阶段就失败了（地址不可绑定等）。
                 # 这里不能用 task.result()：那个调用会把异常原样重抛，
                 # 进程就带着一段 traceback 崩掉，而不是给出一句能看懂的
                 # 中文说明。启动失败属于配置错误，按退出码 2 干净退出。
                 #
-                # Uvicorn 绑定端口失败时抛的是 SystemExit——它是
-                # BaseException 的子类，不是 Exception。必须单独接住，
-                # 否则它会一路穿过 except Exception，traceback 照旧出现。
+                # 注意：端口被占用这条路走不到这里——Uvicorn 绑定失败时
+                # 抛的是 SystemExit，它是 BaseException 的子类，asyncio
+                # 会直接终止事件循环，连这行都执行不到。那条路已由上面
+                # 的端口预探测拦下（提前以退出码 2 干净退出）。
+                # 能走到这里的，是普通异常，task.exception() 取得到原因。
                 error = task.exception()
                 message = _startup_failure_message(error)
                 print(
