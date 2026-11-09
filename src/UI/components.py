@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -387,6 +388,54 @@ class SectionCard(QFrame):
             )
 
 
+class ElidedLabel(QLabel):
+    """按可用宽度省略的标签。
+
+    普通 QLabel 的最小宽度就是整段文字的宽度：窗口窄下来时，
+    它会把整行撑宽，右栏因此出现横向滚动条，操作按钮被推出可视区。
+    这里让标签可以缩到 0 宽，被截断的部分用省略号表示。
+    """
+
+    def __init__(self, text: str = "", parent=None) -> None:
+        super().__init__(parent)
+        self._full_text = text
+        # Preferred 而不是 Ignored：Ignored 会让布局连首选宽度都不给，
+        # 标题会被压成 0 宽而整条消失。Preferred 仍然按原文宽度排，
+        # 空间不够时才缩到最小宽度 0 并用省略号表示截断。
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        super().setText(text)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        """最小宽度为 0：不让整段文字撑宽所在行。
+
+        QLabel 的最小宽度就是文字本身的宽度，窄窗口下会把整行撑宽，
+        右栏因此出现横向滚动条。这里让行可以收缩，截断部分用省略号表示。
+        """
+        base = super().minimumSizeHint()
+        return QSize(0, base.height())
+
+    def setText(self, text: str) -> None:  # noqa: N802
+        self._full_text = text
+        self._refresh_elision()
+
+    def fullText(self) -> str:  # noqa: N802
+        """未经省略的原文。"""
+        return self._full_text
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._refresh_elision()
+
+    def _refresh_elision(self) -> None:
+        width = self.width()
+        if width <= 0:
+            elided = self._full_text
+        else:
+            elided = self.fontMetrics().elidedText(self._full_text, Qt.ElideRight, width)
+        if elided != super().text():
+            super().setText(elided)
+
+
 class StatusBanner(QFrame):
     """状态条：左侧色条 + 状态标题与内联说明 + 右侧三步面包屑与 STEP 徽标。"""
 
@@ -404,11 +453,11 @@ class StatusBanner(QFrame):
         self.rail.setFixedSize(4, 18)
         layout.addWidget(self.rail, 0, Qt.AlignVCenter)
 
-        self.title = QLabel()
+        self.title = ElidedLabel()
         self.title.setObjectName("statusTitle")
         layout.addWidget(self.title, 0, Qt.AlignVCenter)
 
-        self.detail = QLabel()
+        self.detail = ElidedLabel()
         self.detail.setObjectName("statusDetail")
         layout.addWidget(self.detail, 1, Qt.AlignVCenter)
 

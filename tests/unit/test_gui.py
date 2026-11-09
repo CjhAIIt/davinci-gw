@@ -339,6 +339,49 @@ def test_batch_ack_button_stays_clickable_at_minimum_window_width(qtbot) -> None
     )
 
 
+def test_status_banner_minimum_width_does_not_grow_with_the_message(qtbot) -> None:
+    """状态条的最小宽度不能跟着说明文字一起变长。
+
+    QLabel 的最小宽度就是文字本身的宽度：说明一长，
+    右栏内容就被撑宽，操作按钮被推出可视区。
+    """
+    runner = _FakeRunner()
+    view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    banner = window.status_banner
+    banner.set_message("预览通过，可以生成", "8 项警告或保留决定待确认")
+    short = banner.layout().minimumSize().width()
+    banner.set_message("预览通过，可以生成", "8 项警告或保留决定待确认，" * 4)
+    long = banner.layout().minimumSize().width()
+
+    assert long == short, f"状态条最小宽度随文案变长：{short} -> {long}"
+    # 剩下的固定开销是色条、面包屑与 STEP 徽标：修复前这一条就要 762 像素，
+    # 比右栏可用的 724 像素还宽，横向滚动条因此被逼出来。
+    assert short <= 560, f"状态条最小宽度 {short} 仍然过宽"
+
+
+def test_elided_label_keeps_minimum_width_zero_and_marks_truncation(qtbot) -> None:
+    """省略标签：最小宽度为 0，放不下时用省略号标记截断，原文仍可取回。"""
+    from UI.components import ElidedLabel
+
+    label = ElidedLabel("一段很长的状态说明文字，用来撑破最小宽度")
+    qtbot.addWidget(label)
+    label.show()
+    qtbot.wait(20)
+
+    # 最小宽度必须是 0，否则所在行会被整段文字撑宽。
+    assert label.minimumSizeHint().width() == 0
+
+    label.resize(80, label.sizeHint().height())
+    qtbot.wait(20)
+
+    assert label.text() != label.fullText()
+    assert label.text().endswith("…")
+    assert label.fullText() == "一段很长的状态说明文字，用来撑破最小宽度"
+
+
 def test_search_box_still_filters_the_issue_table(qtbot) -> None:
     """工具栏改成两行后，搜索框仍要真的过滤问题表。"""
     runner = _FakeRunner()
