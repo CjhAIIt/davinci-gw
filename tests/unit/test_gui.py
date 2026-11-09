@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from PySide6.QtCore import QObject, QPoint, QRect, Qt, Signal
 from PySide6.QtWidgets import QLabel, QPushButton
 
@@ -534,6 +535,27 @@ def test_warning_and_decision_rows_can_be_acknowledged(qtbot) -> None:
 def test_output_path_suggestion_is_skipped_without_a_baseline() -> None:
     """没有基准文件时不得抛出异常，界面事件处理不能因此中断。"""
     assert suggest_output_path("") == ""
+
+
+def test_output_path_checks_treat_a_dangling_link_as_an_occupied_name(tmp_path: Path) -> None:
+    """悬空符号链接：名字已被占住，界面校验与写文件时同一口径。
+
+    ``Path.exists()`` 跟随符号链接，悬空链接在它看来「不存在」；真正写
+    文件时按「名字被占用」判定会被拒绝。界面若按前者放行，用户就会在
+    生成阶段才撞上「已存在」，而界面上根本看不到这个文件。
+    """
+    baseline = tmp_path / "基线.arxml"
+    baseline.write_text("x", encoding="utf-8")
+    taken = tmp_path / "基线_v4.84.arxml"
+    try:
+        taken.symlink_to(tmp_path / "不存在.arxml")
+    except OSError:
+        pytest.skip("当前 Windows 权限不允许创建文件符号链接")
+    assert not taken.exists()
+    # 建议路径要绕开被占住的名字。
+    assert Path(suggest_output_path(str(baseline), "4.84")).name == "基线_v4.84_2.arxml"
+    # 直接校验同一个名字时也必须给出「已存在」。
+    assert validate_output_path(str(taken), str(baseline)) is not None
 
 
 def test_issue_table_uses_the_custom_delegate_and_folded_columns(qtbot) -> None:

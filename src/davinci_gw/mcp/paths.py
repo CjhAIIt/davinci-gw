@@ -101,7 +101,11 @@ def validate_new_output(value: object, baseline_path: str, field_name: str = "ou
     baseline_key = os.path.normcase(os.path.realpath(str(baseline)))
     if output_key == baseline_key:
         raise PathPolicyError("BASELINE_OVERWRITE_FORBIDDEN", "输出不得覆盖或别名指向基准 ARXML。", field_name)
-    if resolved.exists():
+    # 用 ``lexists`` 而不是 ``exists``：悬空的符号链接在 ``exists`` 看来是
+    # 「不存在」，但这个名字其实已经被占住——真正写文件时按「名字被占用」
+    # 判定会被拒绝。两层必须用同一个口径，否则用户会收到「已存在」却看不到
+    # 文件。
+    if os.path.lexists(str(resolved)):
         try:
             same_as_baseline = os.path.samefile(resolved, baseline)
         except OSError:

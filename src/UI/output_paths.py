@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
 def _available_path(candidate: Path) -> Path:
-    if not candidate.exists():
+    # 用 ``lexists`` 而不是 ``exists``：悬空的符号链接在 ``exists`` 看来是
+    # 「不存在」，但这个名字其实已经被占住，真正写文件时会被拒绝。
+    if not os.path.lexists(str(candidate)):
         return candidate
     for index in range(2, 10_000):
         alternative = candidate.with_name(f"{candidate.stem}_{index}{candidate.suffix}")
-        if not alternative.exists():
+        if not os.path.lexists(str(alternative)):
             return alternative
     raise ValueError("无法为输出文件生成可用名称，请手动选择其他目录。")
 
@@ -47,7 +50,7 @@ def validate_output_path(output_path: str, baseline_path: str) -> str | None:
         # 路径里含空字符等非法字符时 resolve() 抛 ValueError；
         # 这属于用户填错路径，要给出可读提示而不是让异常逃出界面事件处理。
         pass
-    if output.exists():
+    if os.path.lexists(str(output)):
         return "输出文件已存在，请选择新文件名；工具不会覆盖现有文件。"
     if not output.parent.is_dir():
         return "输出目录不存在，请先选择有效目录。"

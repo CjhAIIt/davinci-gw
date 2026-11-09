@@ -121,6 +121,27 @@ def test_output_policy_resolves_directory_link_alias(
     assert aliased.value.code == "BASELINE_OVERWRITE_FORBIDDEN"
 
 
+def test_output_policy_treats_a_dangling_link_as_an_occupied_name(
+    arxml_factory: object, tmp_path: Path,
+) -> None:
+    """悬空的符号链接：名字已被占住，前置检查必须与写文件时同一口径。
+
+    ``Path.exists()`` 跟随符号链接，悬空链接在它看来「不存在」；但真正
+    写文件时按「名字被占用」判定会被拒绝。两层口径不一致的话，用户会
+    收到「已存在」却看不到文件。
+    """
+    baseline = arxml_factory()  # type: ignore[operator]
+    dangling = tmp_path / "dangling.arxml"
+    try:
+        dangling.symlink_to(tmp_path / "missing-target.arxml")
+    except OSError:
+        pytest.skip("当前 Windows 权限不允许创建文件符号链接")
+    assert not dangling.exists()
+    with pytest.raises(PathPolicyError) as occupied:
+        validate_new_output(str(dangling), str(baseline))
+    assert occupied.value.code == "OUTPUT_EXISTS"
+
+
 def test_issue_envelope_is_error_first_and_bounded() -> None:
     issues = [
         {**issue(f"W{index}", "warning"), "severity": "WARNING"}
