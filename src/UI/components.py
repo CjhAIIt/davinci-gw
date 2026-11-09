@@ -506,11 +506,16 @@ class StatusBanner(QFrame):
 
         徽标写的是「STEP 2 / 3」，而面包屑里高亮的那一步说的是同一件事——
         窄窗口下两者只能留一个，状态文案比进度徽标更要紧。
+
+        需要的宽度一律按 `sizeHint` 算，不能按控件当前的几何宽度算：
+        布局会把富余空间分给可伸缩的控件（实测分隔符「/」的几何宽度能到 105 像素，
+        而它的自然宽度只有 6），按几何算出来的需求会随状态漂移。
         """
-        margins = self.contentsMargins()
+        margins = self.layout().contentsMargins()
         inner = max(self.width() - margins.left() - margins.right(), 0)
-        fixed = self.rail.width() + sum(c.width() for c in self._crumbs)
-        fixed += sum(s.width() for s in self._separators)
+        fixed = self.rail.sizeHint().width()
+        fixed += sum(c.sizeHint().width() for c in self._crumbs)
+        fixed += sum(s.sizeHint().width() for s in self._separators)
         spacing = self.layout().spacing() * (len(self._crumbs) + len(self._separators) + 3)
         needed = fixed + spacing + self.title.sizeHint().width() + self.detail.sizeHint().width()
         counter_width = self.counter.sizeHint().width()

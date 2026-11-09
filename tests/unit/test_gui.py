@@ -388,8 +388,8 @@ def test_status_banner_title_is_not_stuck_elided_after_a_longer_message(qtbot) -
     )
 
 
-def test_status_banner_hides_the_step_counter_when_space_is_tight(qtbot) -> None:
-    """空间不够时收起 STEP 徽标，宽了再放出来。
+def test_status_banner_step_counter_follows_the_available_width(qtbot) -> None:
+    """STEP 徽标的显隐只跟可用宽度有关，不受上一次布局的残留影响。
 
     徽标写的是「STEP 2 / 3」，面包屑里高亮的那一步说的是同一件事；
     窄窗口下两者只能留一个，状态文案更要紧。
@@ -404,11 +404,18 @@ def test_status_banner_hides_the_step_counter_when_space_is_tight(qtbot) -> None
     qtbot.wait(50)
 
     banner = window.status_banner
+    # 短文案：空间够，徽标应当显示。
+    banner.set_message("等待输入", "")
+    qtbot.wait(50)
+    assert banner.counter.isVisible(), "空间够时 STEP 徽标不该被收起"
+
+    # 长文案：放不下，徽标收起，把空间让给状态文案。
     banner.set_message("所有校验项已确认，可生成 ARXML", "点击左侧「生成 ARXML」输出最终工程文件")
     qtbot.wait(50)
-    assert not banner.counter.isVisible(), "最窄窗口下 STEP 徽标没有收起"
+    assert not banner.counter.isVisible(), "空间不够时 STEP 徽标没有收起"
 
-    window.resize(1440, 900)
+    # 变宽之后徽标回来。
+    window.resize(1600, 900)
     qtbot.wait(50)
     assert banner.counter.isVisible(), "窗口变宽后 STEP 徽标没有回来"
 
