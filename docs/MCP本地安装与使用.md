@@ -114,6 +114,14 @@ Prepared Session 默认 15 分钟过期、进程内最多 8 个。成功生成�
 确认提交工具BUG修复
 ```
 
+`submit_bug_repair` 的 `mode` 取三个值：`LOCAL_COMMIT`（只在本地提交）、`DRAFT_PR`（推送自己的 fork 并创建 Draft PR，需同时给出 `upstream_repository` 与 `fork_owner`）、`MAINTAINER`（维护者合并并发布）。取消进行中的修复同样需要原样确认：
+
+```text
+确认取消工具BUG修复
+```
+
+三条确认语与 `mode` 取值也会随 `get_gateway_capabilities` 的 `policies` 一并返回（`repair_start_confirmation`、`repair_submit_confirmation`、`repair_cancel_confirmation`、`repair_submit_modes`），客户端不需要靠报错文本反推。
+
 维护者可以选择合并并发布；外部用户只能推送自己的 fork 并创建 Draft PR。PR 不得包含真实 Excel、ARXML、DBC、LDF、BLF 或其他项目数据。修复失败或取消时会保留 worktree 和报告，主工作区不会被自动 stash、reset 或清理。
 
 ## 路径与输出安全
@@ -151,7 +159,9 @@ Prepared Session 默认 15 分钟过期、进程内最多 8 个。成功生成�
 .\uninstall_mcp.ps1
 ```
 
-卸载器会按安装清单逐个校验并删除安装器管理的所有 MCP 版本、配置块和安装清单；修改配置前同样备份。它不会递归删除安装根目录，因此历史备份和任何非本产品文件都不会被误删。完成卸载后重复执行是安全的；清单缺失但 `versions` 仍有文件时会拒绝猜测删除。
+卸载器会按安装清单逐个校验并删除安装器管理的所有 MCP 版本和安装清单，并清理安装清单里记录过的**每一个**客户端配置块（Codex 的 `config.toml`、DeepSeekHarness 的 `cordis.patch.yml`），修改配置前同样备份。安装清单会累计历史上配置过的客户端，所以先装到 Codex、再装到 DeepSeekHarness 后卸载，两个托管块都会被清掉，不会留下指向已删除 EXE 的悬空配置。
+
+若某个客户端的托管标记被手工改坏导致清理失败，卸载器会给出警告并继续删除运行时目录，不会半途停住；此时可手工删除对应文件里的 `# BEGIN DAVINCI_GW_MCP MANAGED BLOCK` 段落。`uninstall_mcp.ps1` 不会递归删除安装根目录，因此历史备份和任何非本产品文件都不会被误删。完成卸载后重复执行是安全的；清单缺失但 `versions` 仍有文件时会拒绝猜测删除。
 
 ## 从源码构建
 
