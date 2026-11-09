@@ -44,6 +44,19 @@ async def _status_for(app, authorization: str) -> int:
     return int(sent[0]["status"])
 
 
+def test_non_ascii_authorization_header_is_rejected_with_401() -> None:
+    """非 ASCII 的 Authorization 头必须回 401，不能变成 500 加一段 traceback。
+
+    hmac.compare_digest 拒绝含非 ASCII 字符的 str；直接拿解码后的字符串去比较，
+    客户端随手发一个高位字节就能把整个请求打成服务端错误。
+    """
+    middleware = BearerTokenMiddleware(_PassthroughApp(), "secret")
+    assert asyncio.run(_status_for(middleware, "Bearer p\u00e4sswort")) == 401
+    assert asyncio.run(_status_for(middleware, "Bearer \u00ff")) == 401
+    # 正确的 ASCII 令牌仍然放行。
+    assert asyncio.run(_status_for(middleware, "Bearer secret")) == 200
+
+
 def test_rejection_drains_the_request_body_before_responding() -> None:
     """鉴权失败时必须先读完请求体再回 401。
 

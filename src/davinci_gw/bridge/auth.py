@@ -48,7 +48,12 @@ class BearerTokenMiddleware:
             scheme, _, value = raw_value.decode("latin-1").partition(" ")
             if scheme.lower() != "bearer":
                 return False
-            return hmac.compare_digest(value.strip(), self._token)
+            # 必须按字节比较：hmac.compare_digest 拒绝含非 ASCII 字符的 str，
+            # 客户端随手发一个高位字节就会让整个请求变成 500 加一段 traceback。
+            # latin-1 与字节一一对应，这里编码回去就是客户端真正发来的字节。
+            candidate = value.strip().encode("latin-1", "replace")
+            expected = self._token.encode("latin-1", "replace")
+            return hmac.compare_digest(candidate, expected)
         return False
 
     async def _reject(self, receive: Receive, send: Send) -> None:
@@ -69,17 +74,17 @@ class BearerTokenMiddleware:
 
     @staticmethod
     async def _drain_body(receive: Receive) -> None:
-        """读取并丢弃请求体，最多处理 1 MiB，避免异常客户端无限占用内存。
+        """读取并丢弃请求体，直到读完或到达整体截止时间。
 
         排空必须有时限：对端发了一部分 body 就停住且不关闭连接时，
         ``receive()`` 永远不会返回，鉴权拒绝也就永远发不出去，
         请求方会把一个 ASGI 任务与套接字一直占住。这里给整体排空
         设一个截止时间，超时后直接放弃剩余请求体并回应 401。
 
-        1 MiB 不是提前放弃的理由：请求体是被丢弃的，不占内存，
-        提前停止反而会让服务端在客户端还在发送时就关闭连接，
-        又回到 Windows 用 RST 中断连接的老问题上。真正的上限是
-        截止时间——异常客户端最多占用这么久。
+        这里没有体积上限：请求体是被丢弃的，不占内存，提前停止反而会
+        让服务端在客户端还在发送时就关闭连接，又回到 Windows 用 RST
+        中断连接的老问题上。真正的上限是截止时间——异常客户端最多
+        占用这么久。
         """
         deadline = asyncio.get_running_loop().time() + DRAIN_TIMEOUT_SECONDS
         while True:

@@ -10,7 +10,30 @@ from davinci_gw.bridge.config import (
     CoreConfig,
     is_loopback_host,
     is_sensitive_name,
+    redact_url,
 )
+
+
+def test_redact_url_masks_credentials_hidden_inside_query_values() -> None:
+    """查询参数的值内部也可能藏着凭据，不能只看键名。
+
+    核心 URL 会原样进入能力接口与发现文件，值里的 user:pass 与令牌前缀
+    都要抹掉，否则持有桥接令牌的客户端能拿到核心自己的凭据。
+    """
+    redacted = redact_url(
+        "http://core/mcp?upstream=http%3A%2F%2Falice%3Ahunter2%40db%3A5432%2Fx"
+    )
+    assert "hunter2" not in redacted
+    assert redact_url("http://core/mcp?state=sk-live-abcdef123").count("sk-live") == 0
+    # 普通查询参数不受影响。
+    assert "version" in redact_url("http://core/mcp?version=4.85")
+
+
+def test_non_ascii_token_is_rejected_before_start() -> None:
+    """令牌必须能在 HTTP 头里原样送达，非 ASCII 的要在启动时就说清楚。"""
+    config = BridgeConfig(token="p\u00e4sswort")
+    with pytest.raises(BridgeConfigError):
+        config.validate()
 
 
 def test_default_config_is_loopback_only() -> None:

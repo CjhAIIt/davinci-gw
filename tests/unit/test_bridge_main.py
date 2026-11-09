@@ -89,6 +89,30 @@ def test_descriptor_file_is_readable_only_by_the_current_user(tmp_path: Path) ->
     assert json.loads(path.read_text(encoding="utf-8"))["token"] == "t"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL 语义")
+def test_descriptor_acl_drops_preexisting_explicit_grants(tmp_path: Path) -> None:
+    """文件上已有的显式授权也必须被清掉。
+
+    只做 icacls /grant:r 与 /inheritance:r 时，文件上原有的
+    ``Everyone:(R)`` 会原样留下，别的本地账号照样能读到明文令牌。
+    """
+    path = tmp_path / "bridge.json"
+    path.write_text("{}", encoding="utf-8")
+    completed = subprocess.run(
+        ["icacls", str(path), "/grant", "Everyone:(R)"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+    _write_descriptor(path, {"url": "http://127.0.0.1:8765/mcp", "token": "t"})
+
+    acl = _acl_entries(path)
+    assert len(acl) == 1, acl
+    assert not any("Everyone" in entry for entry in acl), acl
+    assert not any("(I)" in entry for entry in acl), acl
+    assert json.loads(path.read_text(encoding="utf-8"))["token"] == "t"
+
+
 def _acl_entries(path: Path) -> list[str]:
     """读出文件的访问控制表条目（去掉路径前缀与空行）。"""
     completed = subprocess.run(

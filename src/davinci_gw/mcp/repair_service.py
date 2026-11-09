@@ -15,6 +15,12 @@ from uuid import uuid4
 from davinci_gw.application import GatewayFacade
 from davinci_gw.contracts import OperationStatus, UpdateRequestDto
 from davinci_gw.mcp.repair_agent import CodexRepairAgent, RepairAgent
+from davinci_gw.mcp.repair_contract import (
+    CANCEL_CONFIRMATION,
+    START_CONFIRMATION,
+    SUBMIT_CONFIRMATION,
+    SUBMIT_MODES,
+)
 from davinci_gw.mcp.repair_models import (
     AgentDiagnosis,
     DiagnosisRecord,
@@ -25,9 +31,6 @@ from davinci_gw.mcp.repair_models import (
 )
 from davinci_gw.mcp.version import MCP_VERSION, load_build_info
 
-START_CONFIRMATION = "确认开始工具BUG自动修复"
-SUBMIT_CONFIRMATION = "确认提交工具BUG修复"
-CANCEL_CONFIRMATION = "确认取消工具BUG修复"
 _CONVENTIONAL_COMMIT = re.compile(
     r"^(fix|feat|refactor|perf|test|build|ci|docs|chore)(\([a-z0-9_.-]+\))?!?: .+",
 )
@@ -434,8 +437,8 @@ class RepairCoordinator:
         if not re.search(r"[\u4e00-\u9fff]", commit_message):
             raise RepairContractError("提交信息必须包含中文说明。")
         normalized_mode = mode.strip().upper()
-        if normalized_mode not in {"LOCAL_COMMIT", "DRAFT_PR", "MAINTAINER"}:
-            raise RepairContractError("mode 只能是 LOCAL_COMMIT、DRAFT_PR 或 MAINTAINER。")
+        if normalized_mode not in set(SUBMIT_MODES):
+            raise RepairContractError("mode 只能是 " + "、".join(SUBMIT_MODES) + "。")
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", remote_name):
             raise RepairContractError("remote_name 格式无效。")
         if normalized_mode == "DRAFT_PR" and (

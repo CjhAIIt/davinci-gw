@@ -13,6 +13,12 @@ from davinci_gw.contracts import OperationStatus, ProgressEventDto, UpdateReques
 from davinci_gw.mcp.mapping import dto_envelope, envelope, issue
 from davinci_gw.mcp.paths import PathPolicyError, validate_input_file, validate_new_output
 from davinci_gw.mcp.runtime import BoundedFacadeRuntime
+from davinci_gw.mcp.repair_contract import (
+    CANCEL_CONFIRMATION,
+    START_CONFIRMATION,
+    SUBMIT_CONFIRMATION,
+    SUBMIT_MODES,
+)
 from davinci_gw.mcp.repair_models import RepairContractError
 from davinci_gw.mcp.version import MCP_VERSION, load_build_info
 
@@ -118,8 +124,10 @@ class GatewayMcpService:
                     "prepared_session_ttl_seconds": self._capabilities.session_ttl_seconds,
                     "prepared_session_capacity": self._capabilities.session_capacity,
                     "repair_requires_source_repository": True,
-                    "repair_start_confirmation": "确认开始工具BUG自动修复",
-                    "repair_submit_confirmation": "确认提交工具BUG修复",
+                    "repair_start_confirmation": START_CONFIRMATION,
+                    "repair_submit_confirmation": SUBMIT_CONFIRMATION,
+                    "repair_cancel_confirmation": CANCEL_CONFIRMATION,
+                    "repair_submit_modes": list(SUBMIT_MODES),
                     "repair_recursive_start_allowed": False,
                 },
             )

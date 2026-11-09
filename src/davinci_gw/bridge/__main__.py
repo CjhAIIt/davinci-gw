@@ -117,8 +117,15 @@ def _restrict_descriptor_permissions(path: Path) -> None:
 
     ``os.chmod(path, 0o600)`` 在 Windows 上只改只读属性，不建立
     owner-only 的 DACL——实测改完之后文件仍是 0o666，ACL 里其它用户
-    照样能读。所以 Windows 上改用 ``icacls`` 重设访问控制表：清掉
-    继承的权限，只留下当前用户。
+    照样能读。Windows 上改为直接写显式 DACL：关闭继承、清空全部
+    既有 ACE，只留当前用户一条完全控制。
+
+    只做 ``icacls /grant:r`` 与 ``/inheritance:r`` 是不够的：那两步
+    只替换当前用户的授权并去掉继承项，文件上**已有**的显式授权
+    （例如 ``Everyone:(R)``）会原样留下，别的账号照样能读到令牌。
+
+    收紧失败必须让启动失败：把明文令牌写进一个没保护的文件，
+    比不写发现文件更危险。
     """
     if os.name != "nt":
         try:
@@ -126,34 +133,33 @@ def _restrict_descriptor_permissions(path: Path) -> None:
         except OSError:  # pragma: no cover - 权限受限的环境
             pass
         return
-    try:
-        import subprocess
+    import subprocess
 
-        # icacls 的授权项要写成 ``*SID``：不带星号时它会当成账户名去解析，
-        # 于是报错 "No mapping between account names and security IDs"。
-        sid = _current_user_sid()
-        grant = f"*{sid}" if sid.upper().startswith("S-1-") else sid
-        # 分两步做：先只授予当前用户完全控制，再清掉继承来的 ACE。
-        # 合成一步时 icacls 的执行顺序不保证，继承项可能残留下来，
-        # 别的本地账号照样能读到令牌。
+    sid = _current_user_sid()
+    if not sid.upper().startswith("S-1-"):
+        # 取不到 SID 就无法精确授权；授权给用户名可能命中域内同名账户。
+        raise BridgeConfigError("无法确定当前用户的 SID，不能安全地限制发现文件的访问控制表。")
+    script = (
+        "$ErrorActionPreference='Stop';"
+        "$acl = New-Object System.Security.AccessControl.FileSecurity;"
+        "$acl.SetAccessRuleProtection($true, $false);"
+        "$id = New-Object System.Security.Principal.SecurityIdentifier('{sid}');"
+        "$rule = New-Object System.Security.AccessControl.FileSystemAccessRule("
+        "$id, [System.Security.AccessControl.FileSystemRights]::FullControl, "
+        "[System.Security.AccessControl.AccessControlType]::Allow);"
+        "$acl.AddAccessRule($rule);"
+        "$acl.SetOwner($id);"
+        "Set-Acl -LiteralPath '{path}' -AclObject $acl"
+    ).format(sid=sid, path=str(path).replace("'", "''"))
+    try:
         subprocess.run(
-            ["icacls", str(path), "/grant:r", f"{grant}:(F)"],
-            check=True, capture_output=True, timeout=30,
-        )
-        subprocess.run(
-            ["icacls", str(path), "/inheritance:r"],
-            check=True, capture_output=True, timeout=30,
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            check=True, capture_output=True, timeout=30, text=True, encoding="utf-8", errors="replace",
         )
     except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover - 取决于系统环境
-        # icacls 不可用时 chmod 0o600 在 Windows 上不建立 DACL，
-        # 等于没有保护——必须让运维看见，而不是静默地裸奔。
-        LOGGER.error(
-            "无法收紧发现文件的访问控制表，发现文件可能对其它本地账号可读：%s", exc,
-        )
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
+        raise BridgeConfigError(
+            f"无法收紧发现文件的访问控制表，发现文件可能对其它本地账号可读：{exc}"
+        ) from exc
 
 
 def _current_user_sid() -> str:

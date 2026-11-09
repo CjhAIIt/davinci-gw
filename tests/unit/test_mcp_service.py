@@ -16,6 +16,12 @@ from davinci_gw.application import GatewayFacade
 from davinci_gw.application.sessions import PreparedSessionStore
 from davinci_gw.mcp.mapping import MAX_ISSUES, envelope, issue
 from davinci_gw.mcp.paths import PathPolicyError, validate_input_file, validate_new_output
+from davinci_gw.mcp.repair_contract import (
+    CANCEL_CONFIRMATION,
+    START_CONFIRMATION,
+    SUBMIT_CONFIRMATION,
+    SUBMIT_MODES,
+)
 from davinci_gw.mcp.runtime import BoundedFacadeRuntime
 from davinci_gw.mcp.server import SERVER_INSTRUCTIONS, build_server
 from davinci_gw.mcp.service import GatewayMcpService
@@ -37,6 +43,27 @@ class _DiagnosisRepairs:
 
     async def close(self) -> None:
         return None
+
+
+def test_repair_contract_is_published_in_capabilities_and_tool_descriptions() -> None:
+    """三条确认语与提交模式必须公开，客户端不能靠报错文本反推。"""
+    service = GatewayMcpService()
+    policies = service.get_gateway_capabilities()["policies"]
+    assert policies["repair_start_confirmation"] == START_CONFIRMATION
+    assert policies["repair_submit_confirmation"] == SUBMIT_CONFIRMATION
+    assert policies["repair_cancel_confirmation"] == CANCEL_CONFIRMATION
+    assert tuple(policies["repair_submit_modes"]) == SUBMIT_MODES
+
+    async def scenario() -> None:
+        tools = await build_server(service).list_tools()
+        descriptions = {tool.name: tool.description for tool in tools}
+        assert START_CONFIRMATION in descriptions["start_bug_repair"]
+        assert SUBMIT_CONFIRMATION in descriptions["submit_bug_repair"]
+        assert CANCEL_CONFIRMATION in descriptions["cancel_bug_repair"]
+        for mode in SUBMIT_MODES:
+            assert mode in descriptions["submit_bug_repair"]
+
+    asyncio.run(scenario())
 
 
 def test_mcp_adapter_has_no_internal_arxml_cli_or_network_dependencies() -> None:
