@@ -163,7 +163,10 @@ class DirectRouteSemanticLocator:
         if len(nodes) != 1 or definition_ref(nodes[0], self.namespace) != defs.ECUC_PDU:
             return False, f"EcuC PDU“{path}”实际候选数为 {len(nodes)}"
         parameters, _ = semantic_values(nodes[0], self.namespace)
-        expected = {defs.ECUC_PDU_LENGTH: str(length), defs.ECUC_PDU_J1939: "false"}
+        # 未填写的可选 Length 表示「不限定」：DELETE 行按契约只用身份字段定位路由。
+        expected = {defs.ECUC_PDU_J1939: "false"}
+        if length is not None:
+            expected[defs.ECUC_PDU_LENGTH] = str(length)
         matched, conflicts = _required_values_match(parameters, expected)
         return matched, "；".join(conflicts)
 
@@ -192,16 +195,21 @@ class DirectRouteSemanticLocator:
         skipped_by_name: list[str] = []
         configured_type_notes: dict[str, str] = {}
         chains: dict[tuple[str, str, str, str], DirectSourceChain] = {}
+        # DELETE 行按契约只用身份字段定位路由：未填写的可选参数表示「不限定」，
+        # 不得当成期望字面量去比对基准现值；填写了则仍严格比对。
         expected_parameters = {
             defs.CANIF_RX_CAN_ID: str(key.source_can_id),
-            defs.CANIF_RX_DLC: str(route.source_length),
             defs.CANIF_RX_INDICATION_NAME: "PduR_CanIfRxIndication",
-            defs.CANIF_RX_INDICATION_UL: route.source_rx_indication_ul or "",
             defs.CANIF_RX_READ_DATA: "false",
             defs.CANIF_RX_READ_NOTIFY: "false",
-            defs.CANIF_RX_DLC_CHECK: enabled(route.source_dlc_check_enabled),
             defs.CANIF_RX_TYPE: "STATIC",
         }
+        if route.source_length is not None:
+            expected_parameters[defs.CANIF_RX_DLC] = str(route.source_length)
+        if route.source_rx_indication_ul is not None:
+            expected_parameters[defs.CANIF_RX_INDICATION_UL] = route.source_rx_indication_ul
+        if route.source_dlc_check_enabled is not None:
+            expected_parameters[defs.CANIF_RX_DLC_CHECK] = enabled(route.source_dlc_check_enabled)
         for canif in self.index.find_by_definition_ref(defs.CANIF_RX):
             name = direct_child_text(canif, self.namespace, "SHORT-NAME")
             parameters, references = semantic_values(canif, self.namespace)
@@ -224,14 +232,13 @@ class DirectRouteSemanticLocator:
             # ADD 只新增目标腿时不会改写完整既有 Rx。报文名、CAN ID、HRH 和
             # PDU 引用仍必须唯一一致；仅 CAN 类型允许采用基准现值，避免标准表的
             # 默认 STANDARD_CAN 否定 DBC 已配置的 STANDARD_FD_CAN。
-            if not (
+            # 未填写报文类型（DELETE 行可空）表示不限定该参数。
+            if route.source_message_type is not None and not (
                 accept_configured_can_type
                 and len(actual_types) == 1
                 and actual_types[0] in SUPPORTED_CAN_TYPES
             ):
-                candidate_expected[defs.CANIF_RX_CAN_ID_TYPE] = (
-                    route.source_message_type or ""
-                )
+                candidate_expected[defs.CANIF_RX_CAN_ID_TYPE] = route.source_message_type
             matched, differences = _required_values_match(parameters, candidate_expected)
             pdu_refs = references.get(defs.CANIF_RX_PDU_REF, ())
             if not matched or len(pdu_refs) != 1:
@@ -363,13 +370,15 @@ class DirectRouteSemanticLocator:
         endpoints: dict[tuple[str, str], DirectTargetEndpoint] = {}
         expected_parameters = {
             defs.CANIF_TX_CAN_ID: str(key.target_can_id),
-            defs.CANIF_TX_CAN_ID_TYPE: route.target_message_type or "",
-            defs.CANIF_TX_DLC: str(route.target_length),
             defs.CANIF_TX_CONFIRM_NAME: "NULL_PTR",
             defs.CANIF_TX_CONFIRM_UL: "NONE",
             defs.CANIF_TX_READ_NOTIFY: "false",
             defs.CANIF_TX_TYPE: "STATIC",
         }
+        if route.target_length is not None:
+            expected_parameters[defs.CANIF_TX_DLC] = str(route.target_length)
+        if route.target_message_type is not None:
+            expected_parameters[defs.CANIF_TX_CAN_ID_TYPE] = route.target_message_type
         for canif in self.index.find_by_definition_ref(defs.CANIF_TX):
             name = direct_child_text(canif, self.namespace, "SHORT-NAME")
             parameters, references = semantic_values(canif, self.namespace)
@@ -465,11 +474,12 @@ class DirectRouteSemanticLocator:
             # 已位于精确源 RoutingPath 下的既有目标腿，身份由 CAN ID、TxBuffer、报文名、
             # EcuC 引用和 PduR 引用链共同确认。E0Y 真实基线的 Truncation 与标准表创建策略
             # 不同，但重复创建第二套端点更危险；这里仍严格校验类型和 DLC，保留基线策略。
-            params_ok, _ = _required_values_match(parameters, {
-                defs.CANIF_TX_CAN_ID: str(route.key.target_can_id),
-                defs.CANIF_TX_CAN_ID_TYPE: route.target_message_type or "",
-                defs.CANIF_TX_DLC: str(route.target_length),
-            })
+            tx_expected = {defs.CANIF_TX_CAN_ID: str(route.key.target_can_id)}
+            if route.target_message_type is not None:
+                tx_expected[defs.CANIF_TX_CAN_ID_TYPE] = route.target_message_type
+            if route.target_length is not None:
+                tx_expected[defs.CANIF_TX_DLC] = str(route.target_length)
+            params_ok, _ = _required_values_match(parameters, tx_expected)
             ecuc_ok, _ = self._ecuc_matches(ecuc_path, route.target_length)
             if not same_id or not same_name or not params_ok or not ecuc_ok:
                 continue
@@ -492,15 +502,19 @@ class DirectRouteSemanticLocator:
                     f"端点数为 {len(endpoints)}"
                 )
                 continue
-            params_ok, parameter_conflicts = _required_values_match(parameters, {
+            destination_expected = {
                 defs.PDUR_DEST_DIRECTION: "TRANSMIT",
                 defs.PDUR_DEST_ROUTING_TYPE: "GATEWAY_ROUTING",
                 defs.PDUR_DEST_PROCESSING: "IMMEDIATE",
-                defs.PDUR_DEST_LENGTH_STRATEGY: (route.length_strategy or "").upper(),
                 defs.PDUR_DEST_CROSS_PARTITION: "false",
                 defs.PDUR_DEST_DATA_PROVISION: "PDUR_DIRECT",
                 defs.PDUR_DEST_CONFIRMATION: "false",
-            })
+            }
+            if route.length_strategy is not None:
+                destination_expected[defs.PDUR_DEST_LENGTH_STRATEGY] = route.length_strategy.upper()
+            params_ok, parameter_conflicts = _required_values_match(
+                parameters, destination_expected,
+            )
             refs_ok, reference_conflicts = _required_values_match(references, {
                 defs.PDUR_DEST_PDU_REF: pdu_refs[0],
                 defs.PDUR_DEST_MODULE_REF: self.destination_module_ref,
