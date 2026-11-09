@@ -43,7 +43,7 @@ python -m davinci_gw.bridge --core stdio --core-command "C:\Python\python.exe -m
 python -m davinci_gw.bridge --core http --core-target http://127.0.0.1:9100/mcp --core-token <令牌>
 ```
 
-常用参数：
+命令行参数（全部选项）：
 
 | 参数 | 说明 |
 | --- | --- |
@@ -51,6 +51,7 @@ python -m davinci_gw.bridge --core http --core-target http://127.0.0.1:9100/mcp 
 | `--core-command` | `stdio` 模式的核心完整命令行，路径含空格时用引号 |
 | `--core-target` | `stdio` 模式为可执行文件路径；`http` 模式为 MCP 端点 URL |
 | `--core-arg` | 追加的核心参数；参数以 `-` 开头时使用 `--core-arg=-m` 形式 |
+| `--core-env` | `stdio` 模式核心进程的环境变量，`KEY=VALUE` 形式，可重复 |
 | `--core-token` | `http` 模式访问核心所需的令牌 |
 | `--core-timeout` | 单次核心调用的超时秒数，缺省 3600；超时按核心不可用处理 |
 | `--host` / `--port` / `--path` | 监听地址、端口（`0` 表示系统分配）、端点路径 |
@@ -63,6 +64,19 @@ python -m davinci_gw.bridge --core http --core-target http://127.0.0.1:9100/mcp 
 | `--allowed-host` | 客户端实际使用的主机名或 IP，可重复；用于 Host 白名单 |
 | `--public-host` | 对外通告的客户端可达主机名或 IP；绑定全部接口时用它替代 `0.0.0.0` |
 | `--log-level` | 日志级别 |
+
+`--core-env` 只对 `stdio` 核心生效，按 `KEY=VALUE` 给出，可重复传入。
+注意核心子进程拿到的**不是**父进程的完整环境：SDK 只继承一小组安全变量
+（Windows 下为 `APPDATA`、`LOCALAPPDATA`、`PATH`、`PATHEXT`、`SYSTEMROOT`、
+`TEMP`、`USERNAME`、`USERPROFILE` 等），其余变量不会传下去。核心需要的
+自定义变量、自定义证书路径、代理设置等，都要用 `--core-env` 显式补上：
+
+```powershell
+python -m davinci_gw.bridge --core stdio `
+  --core-command "C:\Python\python.exe -m davinci_gw.mcp" `
+  --core-env REQUESTS_CA_BUNDLE=C:\certs\corp.pem `
+  --core-env HTTP_PROXY=http://proxy.intra:8080
+```
 
 ### 对外监听必须加密
 
