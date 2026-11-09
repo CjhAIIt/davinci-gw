@@ -229,6 +229,24 @@ def test_core_description_redacts_short_credential_keys() -> None:
     assert "fast" in text
 
 
+def test_core_description_redacts_url_credentials_in_the_fragment() -> None:
+    """URL 的 fragment 里也可能藏令牌（OAuth 风格）。"""
+    described = CoreConfig(
+        mode="http", target="http://core.internal/mcp#access_token=abc123",
+    ).describe()
+    assert "abc123" not in str(described)
+
+
+def test_core_description_redacts_url_passwords_containing_colons() -> None:
+    """密码本身带冒号时也要抹掉。"""
+    described = CoreConfig(
+        mode="http", target="https://alice:p:a:ss@core.internal/mcp",
+    ).describe()
+    text = str(described)
+    assert "p:a:ss" not in text
+    assert "alice" in text
+
+
 def test_core_description_redacts_escaped_quoted_json() -> None:
     """命令行里常见转义引号的 JSON 写法也要脱敏。
 
@@ -262,6 +280,63 @@ def test_core_description_keeps_values_with_commas_intact() -> None:
     text = str(described)
     assert "abc123" not in text
     assert "a,b" in text
+
+
+def test_core_description_redacts_json_credentials_ending_with_a_sensitive_word() -> None:
+    """取值恰好以 token / secret 结尾时也必须脱敏。
+
+    这里的坑很隐蔽：整串参数规范化后以 token 结尾，若按"整串是不是敏感
+    参数名"来判断，就会走进参数名分支而跳过取值脱敏，凭据原样进入对外
+    描述。取值以什么结尾都不该影响脱敏。
+    """
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe",
+        args=('--config={"api_token":"abc123token"}',),
+    ).describe()
+    assert "abc123token" not in str(described)
+
+
+def test_core_description_redacts_json_credentials_ending_with_secret() -> None:
+    """同理：取值以 secret 结尾也要脱敏。"""
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe",
+        args=('--config={"client_secret":"my-secret"}',),
+    ).describe()
+    assert "my-secret" not in str(described)
+
+
+def test_core_description_redacts_a_bare_credential_value() -> None:
+    """裸取值本身就是凭据时要抹掉。"""
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe",
+        args=("my-token-value", "sk-live-abcdef123"),
+    ).describe()
+    text = str(described)
+    assert "my-token-value" not in text
+    assert "sk-live-abcdef123" not in text
+
+
+def test_core_description_keeps_paths_and_ordinary_words() -> None:
+    """路径与普通词不是凭据，不能被抹掉。"""
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe",
+        args=("C:\\keys\\token.txt", "session", "fast"),
+    ).describe()
+    text = str(described)
+    assert "token.txt" in text
+    assert "session" in text
+    assert "fast" in text
+
+
+def test_core_description_keeps_the_next_argument_name() -> None:
+    """取值恰好是敏感词时，不能把下一个参数名一起抹掉。"""
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe",
+        args=("--label", "session", "--output", "x.arxml"),
+    ).describe()
+    text = str(described)
+    assert "--output" in text
+    assert "x.arxml" in text
 
 
 def test_core_description_keeps_ordinary_values_intact() -> None:

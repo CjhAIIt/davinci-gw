@@ -144,8 +144,12 @@ def _restrict_descriptor_permissions(path: Path) -> None:
             ["icacls", str(path), "/inheritance:r"],
             check=True, capture_output=True, timeout=30,
         )
-    except (OSError, subprocess.SubprocessError):  # pragma: no cover - 取决于系统环境
-        # icacls 不可用时至少去掉写权限，避免令牌被就地改写。
+    except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover - 取决于系统环境
+        # icacls 不可用时 chmod 0o600 在 Windows 上不建立 DACL，
+        # 等于没有保护——必须让运维看见，而不是静默地裸奔。
+        LOGGER.error(
+            "无法收紧发现文件的访问控制表，发现文件可能对其它本地账号可读：%s", exc,
+        )
         try:
             os.chmod(path, 0o600)
         except OSError:
@@ -178,13 +182,25 @@ def _current_user_sid() -> str:
         pass
     import getpass
 
-    return getpass.getuser()
+    try:
+        return getpass.getuser()
+    except OSError:  # pragma: no cover - 取不到用户名时
+        # 连用户名都取不到时，交给 icacls 自己解析当前账户；
+        # 这里给一个必然解析失败的占位，让授权明确失败而不是授权给错人。
+        return ""
 
 
 def _write_descriptor(path: Path, descriptor: dict[str, object]) -> None:
+    """写出客户端发现文件，并确保只有当前用户能读。
+
+    先建空文件并收紧权限，再写入内容：直接 ``write_text`` 会让文件先按
+    父目录继承的权限落盘，写入与收紧之间存在一个明文令牌可被其它本地
+    账号读取的窗口。
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(descriptor, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.touch(exist_ok=True)
     _restrict_descriptor_permissions(path)
+    path.write_text(json.dumps(descriptor, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 async def _serve(config: BridgeConfig, log_level: str) -> None:

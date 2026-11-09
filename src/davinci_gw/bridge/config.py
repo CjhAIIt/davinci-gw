@@ -38,6 +38,13 @@ SENSITIVE_NAMES = frozenset({
 # 规范化后不等于集合里的名字，但仍然是令牌类参数。
 SENSITIVE_SUFFIXES = ("token", "secret", "password", "passwd", "credential")
 
+# 常见的令牌前缀：sk-live-、sk-、ghp_、gho_、xoxb-、AKIA 等。
+# 这些形态的取值本身就是凭据，参数名未必带敏感字样。
+_CREDENTIAL_PREFIXES = (
+    "sk-", "sk_live_", "sk_test_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_",
+    "xoxb-", "xoxp-", "xoxa-", "akia", "aiza", "ya29.", "eyj",
+)
+
 # 复合写法里可单独成段的强凭据词：--x-api-key、--my-secret 这类。
 # 这些词本身几乎只出现在凭据语境里，命中即可判定敏感。
 _STRONG_SEGMENTS = frozenset({
@@ -164,16 +171,27 @@ def redact_url(target: str) -> str:
             for key, value in parse_qsl(query, keep_blank_values=True)
         ]
         query = urlencode(pairs)
-    return urlunsplit((parts.scheme, netloc, parts.path, query, parts.fragment))
+    fragment = parts.fragment
+    if fragment:
+        # fragment 里同样可能藏令牌（OAuth 风格的 #access_token=…）。
+        fragment = redact_value(fragment)
+    return urlunsplit((parts.scheme, netloc, parts.path, query, fragment))
 
 
 def redact_args(args: tuple[str, ...]) -> list[str]:
     """抹掉命令行参数中的凭据。
 
-    同时覆盖 ``--token=xxx`` 与 ``--token xxx`` 两种写法；参数名不含
-    敏感字样的值原样保留，便于客户端判断核心形态。凭据也可能藏在参数值
-    内部（例如 ``--header "Authorization: Bearer xxx"``），这类内容
-    同样要抹掉。
+    参数有三种形态，都要处理：
+
+    - ``--token=xxx``：参数名敏感，整个取值替换为 ``***``；
+    - ``--token xxx``：参数名敏感，下一个参数整体替换为 ``***``；
+    - 取值本身含凭据（``--header "Authorization: Bearer xxx"``、
+      ``--config={"api_token":"xxx"}``）：由 ``redact_value`` 处理。
+
+    这里要特别注意：不能把"整串参数"直接当参数名去判敏感。
+    ``--config={"api_token":"abc123token"}`` 整串规范化后以 token 结尾，
+    若按整串判定就会走进"参数名敏感"分支，反而跳过了取值脱敏，
+    凭据就原样进了对外描述。
     """
     redacted: list[str] = []
     redact_next = False
@@ -183,15 +201,47 @@ def redact_args(args: tuple[str, ...]) -> list[str]:
             redact_next = False
             continue
         name, separator, _ = arg.partition("=")
-        if separator and is_sensitive_name(name):
-            redacted.append(f"{name}={REDACTED}")
+        if separator:
+            # --name=value 形态：只按参数名判断敏感与否。
+            if is_sensitive_name(name):
+                redacted.append(f"{name}={REDACTED}")
+            else:
+                redacted.append(redact_value(arg))
             continue
-        if is_sensitive_name(arg):
-            redacted.append(arg)
+        if arg.startswith("-") and is_sensitive_name(arg):
+            # 开关形态（--token）：值在下一个参数里。
+            redacted.append(redact_value(arg))
             redact_next = True
+            continue
+        # 裸取值：整体就是一个凭据串时直接抹掉。
+        if _looks_like_credential(arg):
+            redacted.append(REDACTED)
             continue
         redacted.append(redact_value(arg))
     return redacted
+
+
+def _looks_like_credential(text: str) -> bool:
+    """判断一个裸取值是否整个就是凭据。
+
+    两种情况算凭据：
+
+    - 整体像敏感名，但不是敏感词典里的原词（``my-token-value``）；
+      敏感词典里的单个普通词（``session``、``token``）保留原样。
+    - 带常见令牌前缀（``sk-live-``、``ghp_``、``xoxb-`` 这类），
+      参数名未必带敏感字样，但取值本身就是凭据。
+
+    含路径分隔符的取值一律不算凭据：那是文件位置。
+    """
+    if any(separator in text for separator in ("/", "\\", ":", ";")):
+        return False
+    lowered = text.lower()
+    if any(lowered.startswith(prefix) for prefix in _CREDENTIAL_PREFIXES):
+        return True
+    normalized = _normalize_name(text.lstrip("-"))
+    if normalized in SENSITIVE_NAMES:
+        return False
+    return is_sensitive_name(text)
 
 
 # 藏在参数值内部的凭据写法，例如 "Authorization: Bearer xxx"、
@@ -203,6 +253,7 @@ def redact_args(args: tuple[str, ...]) -> list[str]:
 _KEY_VALUE_PATTERN = re.compile(r"(?P<key>[\w.\-]+)(?:\\?[\"'])?\s*[:=]\s*")
 
 # URL 里内嵌的账号密码：https://user:pass@host
+# 密码本身可能含冒号（https://u:p:a@h），所以密码段要一路吃到 @ 之前。
 _URL_USERINFO_PATTERN = re.compile(
     r"(?i)(?P<scheme>[a-z][a-z0-9+.\-]*://)(?P<user>[^\s/?#:@]+):(?P<password>[^\s/?#@]+)@"
 )
