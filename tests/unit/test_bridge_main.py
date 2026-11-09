@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -90,11 +92,59 @@ def test_descriptor_file_is_readable_only_by_the_current_user(tmp_path: Path) ->
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows ACL 语义")
+def test_descriptor_acl_is_idempotent_across_restarts(tmp_path: Path) -> None:
+    """同一个发现文件路径重复收紧必须都成功。
+
+    Bridge 重启会复用同一个发现文件路径，收紧动作必须可重复执行：
+    之前用 PowerShell ``Set-Acl`` 时，第二次收紧会因 ``SetOwner``
+    需要 ``SeSecurityPrivilege`` 而失败，fail-closed 之下 Bridge
+    重启直接起不来。
+    """
+    path = tmp_path / "bridge.json"
+    for _ in range(3):
+        _write_descriptor(path, {"url": "http://127.0.0.1:8765/mcp", "token": "t"})
+        acl = _acl_entries(path)
+        assert len(acl) == 1, acl
+        assert not any("(I)" in entry for entry in acl), acl
+    assert json.loads(path.read_text(encoding="utf-8"))["token"] == "t"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL 语义")
+def test_descriptor_write_succeeds_while_a_client_holds_the_file(tmp_path: Path) -> None:
+    """客户端正拿着发现文件时，Bridge 重启仍要能写出新的发现文件。
+
+    Windows 的 ``MoveFileEx`` 要求目标文件没有打开的句柄，客户端正在
+    读发现文件时替换会报 ``WinError 5``。写入必须重试到句柄释放为止，
+    不能让 Bridge 直接起不来。
+    """
+    path = tmp_path / "bridge.json"
+    _write_descriptor(path, {"url": "http://127.0.0.1:8765/mcp", "token": "first"})
+    handle = path.open("r", encoding="utf-8")
+
+    def release() -> None:
+        time.sleep(0.2)
+        handle.close()
+
+    releaser = threading.Thread(target=release)
+    releaser.start()
+    try:
+        _write_descriptor(path, {"url": "http://127.0.0.1:8765/mcp", "token": "second"})
+    finally:
+        releaser.join(timeout=10)
+        if not handle.closed:
+            handle.close()
+    assert json.loads(path.read_text(encoding="utf-8"))["token"] == "second"
+    # 替换后不留临时文件。
+    assert sorted(item.name for item in tmp_path.iterdir()) == ["bridge.json"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL 语义")
 def test_descriptor_acl_drops_preexisting_explicit_grants(tmp_path: Path) -> None:
     """文件上已有的显式授权也必须被清掉。
 
     只做 icacls /grant:r 与 /inheritance:r 时，文件上原有的
-    ``Everyone:(R)`` 会原样留下，别的本地账号照样能读到明文令牌。
+    ``Everyone:(R)`` 会原样留下，别的本地账号照样能读到明文令牌；
+    收紧流程必须把别人的显式授权逐条摘掉。
     """
     path = tmp_path / "bridge.json"
     path.write_text("{}", encoding="utf-8")

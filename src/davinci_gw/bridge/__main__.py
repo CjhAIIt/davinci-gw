@@ -117,12 +117,26 @@ def _restrict_descriptor_permissions(path: Path) -> None:
 
     ``os.chmod(path, 0o600)`` 在 Windows 上只改只读属性，不建立
     owner-only 的 DACL——实测改完之后文件仍是 0o666，ACL 里其它用户
-    照样能读。Windows 上改为直接写显式 DACL：关闭继承、清空全部
-    既有 ACE，只留当前用户一条完全控制。
+    照样能读。Windows 上改为用 ``icacls`` 重建访问控制表：先给当前
+    用户显式授权，再去掉继承项，最后把别人残留的显式授权逐条移除，
+    只留当前用户一条完全控制。
 
     只做 ``icacls /grant:r`` 与 ``/inheritance:r`` 是不够的：那两步
     只替换当前用户的授权并去掉继承项，文件上**已有**的显式授权
     （例如 ``Everyone:(R)``）会原样留下，别的账号照样能读到令牌。
+
+    顺序上必须先授权再去继承：``/inheritance:r`` 会把继承项从
+    访问控制表里摘掉，如果此时当前用户还没有显式授权，文件会短暂
+    变成"谁都没有权限"，紧接着的写入与客户端的读取都会撞上
+    ``PermissionError``。
+
+    这里不用 PowerShell 的 ``Set-Acl``：``Set-Acl`` 属于
+    ``Microsoft.PowerShell.Security`` 模块，在 PowerShell 7 环境里
+    启动的 Windows PowerShell 5.1 会因模块自动加载失败而报错
+    （"the module could not be loaded"）；而且它带 ``SetOwner`` 时
+    需要 ``SeSecurityPrivilege``，对同一个文件重复收紧会失败，
+    Bridge 重启就会因 fail-closed 直接起不来。``icacls`` 是系统自带
+    的可执行文件，没有模块依赖，重复执行结果一致。
 
     收紧失败必须让启动失败：把明文令牌写进一个没保护的文件，
     比不写发现文件更危险。
@@ -133,33 +147,126 @@ def _restrict_descriptor_permissions(path: Path) -> None:
         except OSError:  # pragma: no cover - 权限受限的环境
             pass
         return
-    import subprocess
-
     sid = _current_user_sid()
     if not sid.upper().startswith("S-1-"):
         # 取不到 SID 就无法精确授权；授权给用户名可能命中域内同名账户。
         raise BridgeConfigError("无法确定当前用户的 SID，不能安全地限制发现文件的访问控制表。")
-    script = (
-        "$ErrorActionPreference='Stop';"
-        "$acl = New-Object System.Security.AccessControl.FileSecurity;"
-        "$acl.SetAccessRuleProtection($true, $false);"
-        "$id = New-Object System.Security.Principal.SecurityIdentifier('{sid}');"
-        "$rule = New-Object System.Security.AccessControl.FileSystemAccessRule("
-        "$id, [System.Security.AccessControl.FileSystemRights]::FullControl, "
-        "[System.Security.AccessControl.AccessControlType]::Allow);"
-        "$acl.AddAccessRule($rule);"
-        "$acl.SetOwner($id);"
-        "Set-Acl -LiteralPath '{path}' -AclObject $acl"
-    ).format(sid=sid, path=str(path).replace("'", "''"))
+    # 授权项必须写成 *SID：icacls 把不带 * 的 "S-1-…" 当账户名解析，
+    # 会报 "No mapping between account names and security IDs"。
+    # 先显式授满当前用户：此后任何时刻当前用户都有权限。
+    _run_icacls(path, "/grant:r", f"*{sid}:(F)")
+    # 去掉继承项。当前用户已经有显式授权，去掉继承不会让他失去权限。
+    _run_icacls(path, "/inheritance:r")
+    # 再把别人残留的显式授权逐条摘掉（继承项已经摘干净，这里只剩显式项）。
+    for principal, is_deny in _explicit_acl_principals(path):
+        if _is_current_user_principal(principal):
+            continue
+        _run_icacls(path, "/remove:d" if is_deny else "/remove:g", principal)
+    # 收尾再确认一次当前用户的授权仍在。
+    _run_icacls(path, "/grant:r", f"*{sid}:(F)")
+
+
+def _run_icacls(path: Path, *arguments: str) -> None:
+    """执行一条 icacls 命令，失败即抛出可读的 BridgeConfigError。"""
+    import subprocess
+
     try:
-        subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-            check=True, capture_output=True, timeout=30, text=True, encoding="utf-8", errors="replace",
+        completed = subprocess.run(
+            ["icacls", str(path), *arguments], capture_output=True, timeout=30,
+            text=True, encoding="utf-8", errors="replace",
         )
     except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover - 取决于系统环境
         raise BridgeConfigError(
             f"无法收紧发现文件的访问控制表，发现文件可能对其它本地账号可读：{exc}"
         ) from exc
+    if completed.returncode != 0:
+        raise BridgeConfigError(
+            "无法收紧发现文件的访问控制表，发现文件可能对其它本地账号可读："
+            + (completed.stdout + completed.stderr).strip()[-300:]
+        )
+
+
+def _explicit_acl_principals(path: Path) -> list[tuple[str, bool]]:
+    """列出文件上显式授权的主体（继承项不算），返回 (主体, 是否拒绝项)。"""
+    import subprocess
+
+    try:
+        completed = subprocess.run(
+            ["icacls", str(path)], capture_output=True, timeout=30,
+            text=True, encoding="utf-8", errors="replace",
+        )
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - 取决于系统环境
+        return []
+    principals: list[tuple[str, bool]] = []
+    for line in completed.stdout.splitlines():
+        line = line.strip()
+        if not line or "Successfully processed" in line:
+            continue
+        # 每行形如 "C:\path\file USER:(F)"，权限部分跟在路径后面。
+        parts = line.split(str(path), 1)
+        entry = parts[1].strip() if len(parts) > 1 else line
+        if not entry or "(I)" in entry:
+            # 继承项由 /inheritance:r 统一摘掉，这里不重复处理。
+            continue
+        principal, separator, permissions = entry.rpartition(":")
+        if not separator:
+            continue
+        principal = principal.strip()
+        if not principal:
+            continue
+        principals.append((principal, "DENY" in permissions.upper()))
+    return principals
+
+
+def _is_current_user_principal(principal: str) -> bool:
+    """判断访问控制表里的一个主体是不是当前用户。
+
+    ``icacls`` 输出的是账户名（形如 ``DESKTOP-BA8OBJV\\cjh``），
+    而 ``getpass.getuser()`` 只给裸用户名（``cjh``）——两者直接比较
+    必然不相等，于是程序会把自己的授权也当成"别人的"摘掉，文件
+    在那一瞬间变成谁都没有权限，读写都撞 ``PermissionError``。
+
+    这里把当前用户的各种可能写法都列出来比较：完整 SID、域限定名、
+    裸用户名；``whoami`` 的输出同样一并纳入。
+    """
+    if not principal:
+        return False
+    candidates = {principal.strip(), principal.strip().upper()}
+    sid = _current_user_sid()
+    if sid:
+        candidates.add(sid.upper())
+        candidates.add(f"*{sid.upper()}")
+    user = _current_user_name()
+    if user:
+        candidates.add(user.upper())
+        candidates.add(user.split("\\")[-1].upper())
+    domain = os.environ.get("USERDOMAIN", "")
+    if domain and user:
+        candidates.add(f"{domain}\\{user}".upper())
+    try:
+        import subprocess
+
+        completed = subprocess.run(
+            ["whoami"], capture_output=True, timeout=30, text=True,
+            encoding="utf-8", errors="replace",
+        )
+        account = completed.stdout.strip()
+        if account:
+            candidates.add(account.upper())
+            candidates.add(account.split("\\")[-1].upper())
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - 取决于系统环境
+        pass
+    return any(candidate in candidates for candidate in candidates if candidate)
+
+
+def _current_user_name() -> str:
+    """取当前用户的裸用户名，用于跳过自己的授权项。"""
+    import getpass
+
+    try:
+        return getpass.getuser()
+    except OSError:  # pragma: no cover - 取不到用户名时
+        return ""
 
 
 def _current_user_sid() -> str:
@@ -199,14 +306,77 @@ def _current_user_sid() -> str:
 def _write_descriptor(path: Path, descriptor: dict[str, object]) -> None:
     """写出客户端发现文件，并确保只有当前用户能读。
 
-    先建空文件并收紧权限，再写入内容：直接 ``write_text`` 会让文件先按
-    父目录继承的权限落盘，写入与收紧之间存在一个明文令牌可被其它本地
-    账号读取的窗口。
+    发现文件里有明文令牌，落盘时必须已经是 owner-only 的权限：直接
+    ``write_text`` 会让文件先按父目录继承的权限落盘，写入与收紧之间
+    存在一个明文令牌可被其它本地账号读取的窗口。
+
+    Windows 上采用"受限临时文件 + 原子替换"：先把内容写进同目录下的
+    临时文件并把它的权限收紧，再 ``os.replace`` 换到目标路径。
+    收紧动作只作用在**临时文件**上，目标文件的访问控制表在整个过程
+    里原封不动——既有发现文件已经被收紧过时，再对它执行 ``icacls``
+    会短暂出现"谁都没有权限"的空窗，客户端在这个窗口里读文件会拿到
+    ``PermissionError``；而先删后建则会在客户端正持有文件句柄时
+    删不掉（``WinError 32``）。原子替换两条路都绕开了。
+
+    ``os.replace`` 在同目录内是原子的，客户端读到的要么是旧文件、
+    要么是完整的受限新文件，不会读到写了一半的内容。
+
+    唯一例外是目标文件正被客户端独占打开：Windows 的 rename 要求
+    目标没有打开的句柄，此时替换会报 ``WinError 5``。这种情况
+    重试一小段时间即可——客户端读完就关闭句柄，通常只是几十毫秒。
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.touch(exist_ok=True)
-    _restrict_descriptor_permissions(path)
-    path.write_text(json.dumps(descriptor, ensure_ascii=False, indent=2), encoding="utf-8")
+    content = json.dumps(descriptor, ensure_ascii=False, indent=2)
+    if os.name != "nt":
+        path.write_text(content, encoding="utf-8")
+        _restrict_descriptor_permissions(path)
+        return
+    temporary = path.with_name(path.name + ".tmp")
+    try:
+        if temporary.exists():
+            temporary.unlink()
+    except OSError:  # pragma: no cover - 残留临时文件删不掉时覆盖写入
+        pass
+    try:
+        temporary.write_text(content, encoding="utf-8")
+        _restrict_descriptor_permissions(temporary)
+    except OSError as exc:
+        raise BridgeConfigError(
+            f"无法写入客户端发现文件 {path}：{exc}"
+        ) from exc
+    try:
+        _replace_with_retry(temporary, path)
+    finally:
+        try:
+            if temporary.exists():
+                temporary.unlink()
+        except OSError:  # pragma: no cover - 清理失败不影响主流程
+            pass
+
+
+def _replace_with_retry(temporary: Path, path: Path, attempts: int = 20) -> None:
+    """把临时文件换到目标路径；目标正被占用时短暂重试。
+
+    Windows 的 ``MoveFileEx`` 要求目标文件没有打开的句柄，客户端正
+    在读发现文件时替换会报 ``WinError 5``。客户端读完即关，通常
+    几十毫秒内就能换上，因此重试一小段时间即可。
+    """
+    import time
+
+    last_error: OSError | None = None
+    for attempt in range(attempts):
+        try:
+            os.replace(temporary, path)
+            return
+        except PermissionError as exc:
+            last_error = exc
+            time.sleep(0.05)
+        except OSError as exc:  # pragma: no cover - 其它错误直接失败
+            last_error = exc
+            break
+    raise BridgeConfigError(
+        f"无法替换客户端发现文件 {path}：{last_error}"
+    ) from last_error
 
 
 async def _serve(config: BridgeConfig, log_level: str) -> None:
