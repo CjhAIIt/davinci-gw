@@ -405,6 +405,31 @@ def test_submit_allows_a_tracked_release_document(
     assert result.submission == {"mode": "LOCAL_COMMIT"}
 
 
+def test_changed_paths_guard_falls_back_to_strict_rules_without_tracked_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """取不到已跟踪清单时按最严口径处理：产物目录里的文件一律拦下。
+
+    ``git ls-tree`` 可能因为没有 HEAD 或仓库损坏而失败；这时候不能因为
+    「查不到就放过」而让构建产物混进提交。
+    """
+    coordinator, record = _awaiting_submission(tmp_path)
+
+    async def fake_run(*args: str, **kwargs: object) -> str:
+        if args[:3] == ("git", "status", "--porcelain"):
+            return " M release/README.md\n"
+        if args[:2] == ("git", "ls-tree"):
+            raise RepairContractError("命令执行失败（128）：git ls-tree")
+        return ""
+
+    monkeypatch.setattr("davinci_gw.mcp.repair_service._run", fake_run)
+    result = asyncio.run(coordinator.submit(
+        record.repair_id, SUBMIT_CONFIRMATION, "LOCAL_COMMIT", "docs(release): 更新发布说明", "origin",
+    ))
+    assert result.state is RepairState.NEEDS_ATTENTION
+    assert "禁止提交" in (result.error or "")
+
+
 def test_cancel_requires_confirmation_and_preserves_session(tmp_path: Path) -> None:
     coordinator, diagnosis = _diagnose(
         tmp_path,
