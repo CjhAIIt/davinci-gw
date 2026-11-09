@@ -198,7 +198,9 @@ def redact_args(args: tuple[str, ...]) -> list[str]:
 # '--config={"api_token":"xxx"}'、"token=xxx"。键名与取值之间允许引号，
 # 以便识别 api_token、x-api-key 这类变体；取值优先按引号里的整段匹配，
 # 免得把同一段里的无关字段一起抹掉。
-_KEY_VALUE_PATTERN = re.compile(r"(?P<key>[\w.\-]+)[\"']?\s*[:=]\s*")
+# 键名两侧可能带转义引号（命令行里常见 --config="{\"api_token\":\"xxx\"}"），
+# 那种形态同样要能识别。
+_KEY_VALUE_PATTERN = re.compile(r"(?P<key>[\w.\-]+)(?:\\?[\"'])?\s*[:=]\s*")
 
 # URL 里内嵌的账号密码：https://user:pass@host
 _URL_USERINFO_PATTERN = re.compile(
@@ -212,17 +214,27 @@ def _redacted_placeholder(raw: str) -> str:
     """保留原有引号形态，把取值换成占位符。"""
     if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
         return f"{raw[0]}{REDACTED}{raw[0]}"
+    # 转义引号形态：\"abc\" -> \"***\"
+    if len(raw) >= 4 and raw.startswith("\\") and raw[1] in "\"'" and raw.endswith(raw[1]):
+        return f"\\{raw[1]}{REDACTED}\\{raw[1]}"
     return REDACTED
 
 
 def _value_span(text: str, start: int) -> tuple[int, int]:
     """给出取值在文本中的区间。
 
-    带引号的取值取到收尾引号为止；不带引号的取值取到分隔符
-    （逗号、分号、右括号、换行或引号）之前。
+    带引号的取值取到收尾引号为止；转义引号（``\\"…\\"``）取到收尾的
+    转义引号为止；不带引号的取值取到分隔符（逗号、分号、右括号、
+    换行或引号）之前。
     """
     if start >= len(text):
         return start, start
+    # 转义引号：\"abc\" 形式的取值。
+    if text.startswith("\\\"", start) or text.startswith("\\'", start):
+        quote = text[start + 1]
+        closing = f"\\{quote}"
+        end = text.find(closing, start + 2)
+        return (start, len(text)) if end == -1 else (start, end + 2)
     quote = text[start]
     if quote in "\"'":
         end = text.find(quote, start + 1)

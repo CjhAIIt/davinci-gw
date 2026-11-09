@@ -129,12 +129,20 @@ def _restrict_descriptor_permissions(path: Path) -> None:
     try:
         import subprocess
 
-        # 先清空继承的 ACE，再只授予当前用户完全控制。
+        # icacls 的授权项要写成 ``*SID``：不带星号时它会当成账户名去解析，
+        # 于是报错 "No mapping between account names and security IDs"。
+        sid = _current_user_sid()
+        grant = f"*{sid}" if sid.upper().startswith("S-1-") else sid
+        # 分两步做：先只授予当前用户完全控制，再清掉继承来的 ACE。
+        # 合成一步时 icacls 的执行顺序不保证，继承项可能残留下来，
+        # 别的本地账号照样能读到令牌。
         subprocess.run(
-            ["icacls", str(path), "/inheritance:r", "/grant:r", f"{_current_user_sid()}:(F)"],
-            check=True,
-            capture_output=True,
-            timeout=30,
+            ["icacls", str(path), "/grant:r", f"{grant}:(F)"],
+            check=True, capture_output=True, timeout=30,
+        )
+        subprocess.run(
+            ["icacls", str(path), "/inheritance:r"],
+            check=True, capture_output=True, timeout=30,
         )
     except (OSError, subprocess.SubprocessError):  # pragma: no cover - 取决于系统环境
         # icacls 不可用时至少去掉写权限，避免令牌被就地改写。
@@ -145,7 +153,12 @@ def _restrict_descriptor_permissions(path: Path) -> None:
 
 
 def _current_user_sid() -> str:
-    """取当前用户的 SID（形如 ``DOMAIN\\name``），用于授权。"""
+    """取当前用户的 SID，用于精确授权。
+
+    ``whoami /user /fo csv /nh`` 的输出形如
+    ``"DESKTOP\\user","S-1-5-21-..."``（两列，不是四列）。SID 才是
+    唯一可靠的账户标识：裸用户名在域内存在同名账户时会授权给错的人。
+    """
     try:
         import subprocess
 
@@ -156,11 +169,11 @@ def _current_user_sid() -> str:
             text=True,
             timeout=30,
         )
-        # 输出形如 "info","user","PC\user","S-1-5-21-...\n"
         for line in completed.stdout.splitlines():
             fields = [item.strip('" ') for item in line.split(",")]
-            if len(fields) >= 4 and fields[-1].upper().startswith("S-1-"):
-                return fields[-1]
+            for field in fields:
+                if field.upper().startswith("S-1-"):
+                    return field
     except (OSError, subprocess.SubprocessError):  # pragma: no cover - 取决于系统环境
         pass
     import getpass

@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from davinci_gw.bridge.__main__ import (
+    _current_user_sid,
     _discovery_token_error,
     _split_command,
     _write_descriptor,
@@ -77,14 +78,40 @@ def test_descriptor_file_is_readable_only_by_the_current_user(tmp_path: Path) ->
     path = tmp_path / "bridge.json"
     _write_descriptor(path, {"url": "http://127.0.0.1:8765/mcp", "token": "t"})
 
+    acl = _acl_entries(path)
+    # 必须恰好剩下一条授权：当前用户自己。
+    assert len(acl) == 1, acl
+    # 继承项必须清干净，否则其它账号仍能读到令牌。
+    assert not any("(I)" in entry for entry in acl), acl
+    assert not any("Everyone" in entry for entry in acl), acl
+    assert not any("BUILTIN\\Users" in entry for entry in acl), acl
+    # 内容本身仍要可读，否则客户端拿不到令牌。
+    assert json.loads(path.read_text(encoding="utf-8"))["token"] == "t"
+
+
+def _acl_entries(path: Path) -> list[str]:
+    """读出文件的访问控制表条目（去掉路径前缀与空行）。"""
     completed = subprocess.run(
         ["icacls", str(path)], capture_output=True, text=True, encoding="utf-8",
         errors="replace", check=True,
     )
-    acl = completed.stdout
-    # 只应剩下当前用户自己的授权，其余继承项必须被清掉。
-    assert "Everyone" not in acl
-    assert "BUILTIN\\Users" not in acl
-    assert "(I)" not in acl, acl
-    # 内容本身仍要可读，否则客户端拿不到令牌。
-    assert json.loads(path.read_text(encoding="utf-8"))["token"] == "t"
+    entries: list[str] = []
+    for line in completed.stdout.splitlines():
+        line = line.strip()
+        if not line or "Successfully processed" in line:
+            continue
+        # 每行形如 "C:\path\file USER:(F)"，权限部分跟在路径后面。
+        parts = line.split(str(path), 1)
+        entries.append(parts[1].strip() if len(parts) > 1 else line)
+    return entries
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL 语义")
+def test_current_user_sid_is_extracted_from_whoami() -> None:
+    """授权必须用 SID：裸用户名在域内同名账户时会授权给错的人。
+
+    ``whoami /user /fo csv /nh`` 输出两列
+    （``"DOMAIN\\user","S-1-5-..."``），不是四列。
+    """
+    sid = _current_user_sid()
+    assert sid.upper().startswith("S-1-"), sid

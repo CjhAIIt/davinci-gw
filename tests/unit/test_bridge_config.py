@@ -229,6 +229,41 @@ def test_core_description_redacts_short_credential_keys() -> None:
     assert "fast" in text
 
 
+def test_core_description_redacts_escaped_quoted_json() -> None:
+    """命令行里常见转义引号的 JSON 写法也要脱敏。
+
+    ``--core-arg='--config={\\"api_token\\":\\"xxx\\"}'`` 传进来就是这个形态，
+    键名两侧各带一个反斜杠引号。
+    """
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe",
+        args=('--config="{\\"api_token\\":\\"abc123\\"}"',),
+    ).describe()
+    text = str(described)
+    assert "abc123" not in text
+    assert "api_token" in text
+
+
+def test_core_description_redacts_nested_json_credentials() -> None:
+    """嵌套在对象里的凭据同样要抹掉。"""
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe",
+        args=('--config={"outer":{"api_token":"abc123"}}',),
+    ).describe()
+    assert "abc123" not in str(described)
+
+
+def test_core_description_keeps_values_with_commas_intact() -> None:
+    """取值里带逗号时不能把后面的字段一起抹掉，也不能漏掉凭据。"""
+    described = CoreConfig(
+        mode="stdio", target="davinci-gw-mcp.exe",
+        args=('--config={"note":"a,b","token":"abc123"}',),
+    ).describe()
+    text = str(described)
+    assert "abc123" not in text
+    assert "a,b" in text
+
+
 def test_core_description_keeps_ordinary_values_intact() -> None:
     """脱敏不能误伤普通字段：只有凭据位置的取值会被抹掉。"""
     described = CoreConfig(
