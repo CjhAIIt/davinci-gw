@@ -298,6 +298,41 @@ def test_issue_card_takes_the_remaining_workbench_height(qtbot) -> None:
     assert window._right.stretch(index) == 1
 
 
+def test_batch_ack_button_stays_clickable_at_minimum_window_width(qtbot) -> None:
+    """窗口最窄时「批量确认」也必须点得到。
+
+    批量确认是生成的前置门禁：按钮一旦被推出右栏可视区，
+    用户既无法确认警告，也无法生成结果，界面等于废掉。
+    """
+    runner = _FakeRunner()
+    view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+    # 只为触发布局，不在屏幕上弹窗。
+    window.setAttribute(Qt.WA_DontShowOnScreen, True)
+    window.resize(1240, 700)
+
+    window._issue_model_changed(issues_to_dto(tuple(
+        ValidationIssue(f"CODE_{index}", f"第 {index} 条问题描述。", severity=ValidationSeverity.WARNING)
+        for index in range(8)
+    )))
+    window.show()
+    qtbot.wait(100)
+
+    scroll = window.page_scroll
+    viewport_width = scroll.viewport().width()
+    ack = window.ack_button
+    right_edge = ack.mapTo(scroll.viewport(), QPoint(ack.width(), 0)).x()
+
+    assert right_edge <= viewport_width, (
+        f"「批量确认」按钮右边缘 x={right_edge} 超出右栏视口 {viewport_width}，按钮点不到"
+    )
+    # 右栏内容不能被撑出视口，否则整块卡片都得横向滚动才能用。
+    assert scroll.horizontalScrollBar().maximum() == 0, (
+        f"右栏出现横向滚动条，右边缘 = {scroll.horizontalScrollBar().maximum()}"
+    )
+
+
 def test_clicking_the_row_checkbox_confirms_the_issue(qtbot) -> None:
     """首列画出来的复选框必须可点，能切换人工确认状态。"""
     runner = _FakeRunner()

@@ -359,15 +359,29 @@ class MainWindow(QMainWindow):
         )
         layout = QVBoxLayout()
         layout.setSpacing(10)
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(10)
+        # 工具栏分两行：筛选胶囊一行，搜索框与操作按钮一行。
+        # 单行排布时筛选胶囊（396 像素）加搜索框（288 像素）加两个按钮
+        # 需要约 870 像素，而 1240 宽的窗口右栏只有 770 像素，
+        # 卡片会被撑到 894 像素宽、把「批量确认」按钮推出可视区——
+        # 而批量确认是生成的前置门禁，按不到就等于无法生成。
+        toolbar = QVBoxLayout()
+        toolbar.setSpacing(8)
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(10)
         self.filter_pills = SegmentedFilter()
-        toolbar.addWidget(self.filter_pills)
-        toolbar.addStretch(1)
+        filter_row.addWidget(self.filter_pills)
+        filter_row.addStretch(1)
+        toolbar.addLayout(filter_row)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
         self.search_edit = QLineEdit()
         self.search_edit.setObjectName("searchInput")
         self.search_edit.setPlaceholderText("搜索代码、说明、位置或建议…")
-        self.search_edit.setFixedWidth(288)
+        # 搜索框吃掉本行剩余空间，但不超过 288 像素：否则宽窗口下
+        # 搜索框会被拉得很长，把操作按钮甩到卡片最右边。
+        self.search_edit.setMinimumWidth(160)
+        self.search_edit.setMaximumWidth(288)
         self.search_icon_action = self.search_edit.addAction(
             make_icon("search", "#94a3b8", 15), QLineEdit.ActionPosition.LeadingPosition,
         )
@@ -378,9 +392,10 @@ class MainWindow(QMainWindow):
         self.ack_button = QPushButton("批量确认")
         self.ack_button.setObjectName("ackBatchButton")
         self.ack_button.setCursor(Qt.PointingHandCursor)
-        toolbar.addWidget(self.search_edit)
-        toolbar.addWidget(self.copy_issues_button)
-        toolbar.addWidget(self.ack_button)
+        action_row.addWidget(self.search_edit, 1)
+        action_row.addWidget(self.copy_issues_button)
+        action_row.addWidget(self.ack_button)
+        toolbar.addLayout(action_row)
         layout.addLayout(toolbar)
 
         self.issue_model = IssueTableModel(self)
