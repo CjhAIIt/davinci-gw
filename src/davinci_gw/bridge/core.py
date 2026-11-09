@@ -163,6 +163,9 @@ class _SessionCore:
         self._error: BaseException | None = None
         self._lock: asyncio.Lock | None = None
         self._timeout_seconds = timeout_seconds
+        # 每一代会话任务与它的停止信号：作废某一代时要能停掉那一代，
+        # 否则被取代的会话任务会一直挂着（STDIO 核心则留下孤儿子进程）。
+        self._session_stops: dict[asyncio.Task[None], asyncio.Event] = {}
 
     async def _make_client(self) -> Any:
         raise NotImplementedError
@@ -182,6 +185,12 @@ class _SessionCore:
         except BaseException as exc:  # noqa: BLE001 - 记录后由调用方判断
             self._error = exc
             ready.set()
+        finally:
+            # 这一代会话结束了，登记项不再需要——否则字典会随
+            # 核心重建次数一直增长。
+            current = asyncio.current_task()
+            if current is not None:
+                self._session_stops.pop(current, None)
 
     async def start(self) -> None:
         """建立核心会话；并发首次调用共享同一次建连。
@@ -205,6 +214,7 @@ class _SessionCore:
                 return
             if self._task is not None and self._task.done():
                 # 任务已结束说明上一次会话没能建立起来（失败或被取消）。
+                self._session_stops.pop(self._task, None)
                 self._task = None
                 self._ready = None
                 self._stop = None
@@ -214,6 +224,8 @@ class _SessionCore:
                 self._stop = asyncio.Event()
                 self._error = None
                 self._task = asyncio.create_task(self._session_task())
+                # 登记这一代的停止信号：作废某一代时要能停掉那一代。
+                self._session_stops[self._task] = self._stop
             ready = self._ready
             session_task = self._task
         assert ready is not None
@@ -229,6 +241,7 @@ class _SessionCore:
                 # 取消后不等待它结束，但要取出它的异常，
                 # 否则会留下"任务异常从未被取回"的告警。
                 session_task.add_done_callback(_consume_task_result)
+                self._session_stops.pop(session_task, None)
                 self._task = None
                 self._ready = None
                 self._stop = None
@@ -265,8 +278,23 @@ class _SessionCore:
         """丢弃当前会话，让下一次调用重新建立连接。
 
         只清理本次调用所用的会话，避免把并发调用刚建立的新会话误清掉。
+
+        「本次调用所用的会话」可能已经不是当前这一代了（期间核心重建过）。
+        早先的实现在这种情况下直接返回，那一代既没收到停止信号也没被
+        取消——按当前代码的调用序列，这种情况还不可达（每一代被取代时
+        要么已经结束，要么会被 stop / cancel 掉），但那依赖的是「恰好
+        每次取代都收尾」这个不显式的约定。
+
+        这里按「代次」把该停的那一代停掉：任务与它的停止信号一起登记，
+        失效时把该代的信号置位，让它自己收尾。这样即便将来新增了一条
+        取代会话的路径、漏了收尾，被取代的那一代也不会一直挂着——对
+        STDIO 核心来说，挂着就等于占着一个核心子进程。
         """
         if session_task is not None and self._task is not session_task:
+            # 失效的是更早的一代：只停掉那一代，不动当前这一代。
+            stop = self._session_stops.pop(session_task, None)
+            if stop is not None:
+                stop.set()
             return
         task = self._task
         stop = self._stop
@@ -276,6 +304,7 @@ class _SessionCore:
         self._stop = None
         self._error = None
         if task is not None and stop is not None:
+            self._session_stops.pop(task, None)
             stop.set()
 
     async def aclose(self) -> None:
@@ -286,6 +315,14 @@ class _SessionCore:
         self._lock = None
         self._ready = None
         self._stop = None
+        # 关闭时把还登记着的每一代都停掉：被取代的旧会话若仍在挂着，
+        # 它们占着的核心子进程会一直活到 Bridge 退出。
+        for pending_task, pending_stop in list(self._session_stops.items()):
+            pending_stop.set()
+            if pending_task is not task and not pending_task.done():
+                pending_task.cancel()
+                pending_task.add_done_callback(_consume_task_result)
+            self._session_stops.pop(pending_task, None)
         if task is None:
             return
         if stop is not None:
