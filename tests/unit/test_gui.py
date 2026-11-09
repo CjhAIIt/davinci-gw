@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, Qt, Signal
+from PySide6.QtCore import QObject, QPoint, QRect, Qt, Signal
 from PySide6.QtWidgets import QLabel, QPushButton
 
 from UI.components import PillButton
@@ -320,17 +320,47 @@ def test_batch_ack_button_stays_clickable_at_minimum_window_width(qtbot) -> None
     qtbot.wait(100)
 
     scroll = window.page_scroll
-    viewport_width = scroll.viewport().width()
+    viewport = scroll.viewport()
+    viewport_width = viewport.width()
     ack = window.ack_button
-    right_edge = ack.mapTo(scroll.viewport(), QPoint(ack.width(), 0)).x()
+    right_edge = ack.mapTo(viewport, QPoint(ack.width(), 0)).x()
 
     assert right_edge <= viewport_width, (
         f"「批量确认」按钮右边缘 x={right_edge} 超出右栏视口 {viewport_width}，按钮点不到"
+    )
+    # 横向之外，纵向也必须完整落在视口里，否则按钮照样被裁掉半截。
+    ack_rect = QRect(ack.mapTo(viewport, QPoint(0, 0)), ack.size())
+    assert viewport.rect().contains(ack_rect), (
+        f"「批量确认」按钮在视口坐标下为 {ack_rect}，没有完整落在视口 {viewport.rect()} 内"
     )
     # 右栏内容不能被撑出视口，否则整块卡片都得横向滚动才能用。
     assert scroll.horizontalScrollBar().maximum() == 0, (
         f"右栏出现横向滚动条，右边缘 = {scroll.horizontalScrollBar().maximum()}"
     )
+
+
+def test_search_box_still_filters_the_issue_table(qtbot) -> None:
+    """工具栏改成两行后，搜索框仍要真的过滤问题表。"""
+    runner = _FakeRunner()
+    view_model = GatewayViewModel(runner)  # type: ignore[arg-type]
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    window._issue_model_changed(issues_to_dto((
+        ValidationIssue("ROUTE_A", "第一条问题说明。", severity=ValidationSeverity.ERROR),
+        ValidationIssue("ROUTE_B", "第二条问题说明。", severity=ValidationSeverity.WARNING),
+    )))
+    assert window.issue_proxy.rowCount() == 2
+
+    window.search_edit.setText("route_a")
+    qtbot.wait(20)
+
+    assert window.issue_proxy.rowCount() == 1
+    assert window.issue_proxy.index(0, 1).data(Qt.DisplayRole) == "ROUTE_A"
+
+    window.search_edit.clear()
+    qtbot.wait(20)
+    assert window.issue_proxy.rowCount() == 2
 
 
 def test_clicking_the_row_checkbox_confirms_the_issue(qtbot) -> None:
