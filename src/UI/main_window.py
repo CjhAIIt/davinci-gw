@@ -84,7 +84,7 @@ class MainWindow(QMainWindow):
         if app is not None:
             apply_theme(app, self._theme)
         self.setWindowTitle("DaVinci 网关路由工具")
-        self.setMinimumSize(1080, 680)
+        self.setMinimumSize(1240, 700)
         self.resize(1440, 900)
         self.setAcceptDrops(True)
         self._build_ui()
@@ -399,9 +399,10 @@ class MainWindow(QMainWindow):
         for column in (2, 3, 6):
             # 报文 ID、报文名称与处理建议已并入自绘单元格的副行，不再单列展示。
             self.issue_table.setColumnHidden(column, True)
-        for column, width in ((0, 132), (1, 232), (5, 216), (7, 128)):
+        for column, width in ((0, 104), (1, 168), (5, 140), (7, 112)):
             header.setSectionResizeMode(column, QHeaderView.Interactive)
             self.issue_table.setColumnWidth(column, width)
+        # 说明列吃掉剩余宽度；固定列压得越窄，这一列留给长描述的空间越大。
         header.setSectionResizeMode(4, QHeaderView.Stretch)
         self.issue_table.verticalHeader().setVisible(False)
         # 行高必须显式固定：QTableView 只在表头为 ResizeToContents 时才采用
@@ -826,6 +827,13 @@ class MainWindow(QMainWindow):
         self.baseline_slot.set_theme(theme)
         self._right_host.set_theme(theme)
         self.issue_delegate.set_theme(theme)
+        self.issue_model.set_theme(theme)
+        self.filter_pills.set_theme(theme)
+        # 卡片标题图标、说明框图标都是自绘的，不会随样式表换肤。
+        for card in self.findChildren(SectionCard):
+            card.set_theme(theme)
+        for icon in self.findChildren(InfoIconWidget):
+            icon.set_theme(theme)
         self.issue_table.viewport().update()
         self._refresh_icons()
 

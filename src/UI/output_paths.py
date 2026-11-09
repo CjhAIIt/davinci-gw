@@ -32,6 +32,10 @@ def validate_output_path(output_path: str, baseline_path: str) -> str | None:
     """返回面向用户的路径错误；有效时返回 None。"""
     if not output_path.strip():
         return "请选择输出 ARXML 路径。"
+    if "\x00" in output_path:
+        # 含空字符的路径在 Windows 上无法解析，Path 会把它当成根目录，
+        # 校验会误判为"可用"，真正失败要等到生成阶段才暴露。
+        return "输出路径包含非法字符，请重新选择。"
     output = Path(output_path).expanduser()
     baseline = Path(baseline_path).expanduser()
     if output.suffix.lower() != ".arxml":
@@ -39,7 +43,9 @@ def validate_output_path(output_path: str, baseline_path: str) -> str | None:
     try:
         if output.resolve() == baseline.resolve():
             return "输出路径不能与基准 ARXML 相同。"
-    except OSError:
+    except (OSError, ValueError):
+        # 路径里含空字符等非法字符时 resolve() 抛 ValueError；
+        # 这属于用户填错路径，要给出可读提示而不是让异常逃出界面事件处理。
         pass
     if output.exists():
         return "输出文件已存在，请选择新文件名；工具不会覆盖现有文件。"

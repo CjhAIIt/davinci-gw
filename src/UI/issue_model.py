@@ -29,6 +29,24 @@ SEVERITY_COLORS = {
     "INFO": "#2563eb",
 }
 
+# 级别色必须随主题走：写死的浅色值在夜间主题下与级别徽标不是同一个色，
+# 同一屏里两处颜色对不上。这里给出主题 token，运行时按当前主题取色。
+SEVERITY_COLOR_TOKENS = {
+    "ERROR": "danger_text",
+    "WARNING": "warning_text",
+    "DECISION": "purple_text",
+    "INFO": "accent",
+}
+
+
+def severity_color(severity: str, theme: str = "light") -> str:
+    """按主题给出级别文字颜色。"""
+    token = SEVERITY_COLOR_TOKENS.get(severity.upper())
+    if token is None:
+        return SEVERITY_COLORS.get(severity.upper(), "#d64545")
+    colors = THEMES.get(theme, LIGHT)
+    return colors.get(token, SEVERITY_COLORS.get(severity.upper(), "#d64545"))
+
 SEVERITY_LABELS = {
     "ERROR": "错误",
     "WARNING": "警告",
@@ -55,6 +73,16 @@ class IssueTableModel(QAbstractTableModel):
         super().__init__(parent)
         self._issues: tuple[IssueDto, ...] = ()
         self._acknowledged: set[int] = set()
+        self._theme = "light"
+
+    def set_theme(self, theme: str) -> None:
+        """级别文字颜色随主题变化，切换后需要重画。"""
+        self._theme = theme
+        if self._issues:
+            self.dataChanged.emit(
+                self.index(0, 0), self.index(len(self._issues) - 1, 0),
+                [Qt.ForegroundRole],
+            )
 
     def set_issues(self, issues: tuple[IssueDto, ...]) -> None:
         self.beginResetModel()
@@ -190,7 +218,7 @@ class IssueTableModel(QAbstractTableModel):
         if role == Qt.UserRole:
             return issue.severity.upper()
         if role == Qt.ForegroundRole and index.column() == 0:
-            color = SEVERITY_COLORS.get(issue.severity.upper())
+            color = severity_color(issue.severity, self._theme)
             return QBrush(QColor(color)) if color else None
         return None
 

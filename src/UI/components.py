@@ -30,12 +30,14 @@ from PySide6.QtWidgets import (
 
 from .styles import LIGHT, THEME_LABELS, THEMES
 
+# 筛选胶囊的圆点颜色用主题 token，而不是写死的色值：
+# 写死浅色值时，夜间主题下的圆点与问题表里的级别徽标不是一个颜色。
 FILTER_ITEMS = (
     ("全部", "ALL", None),
-    ("错误", "ERROR", "#ef4444"),
-    ("警告", "WARNING", "#f59e0b"),
-    ("提示", "INFO", "#3b82f6"),
-    ("保留决定", "DECISION", "#8b5cf6"),
+    ("错误", "ERROR", "danger_text"),
+    ("警告", "WARNING", "warning_text"),
+    ("提示", "INFO", "accent"),
+    ("保留决定", "DECISION", "purple_text"),
 )
 
 
@@ -215,11 +217,18 @@ class InfoIconWidget(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setFixedSize(16, 16)
+        self._theme = "light"
+
+    def set_theme(self, theme: str) -> None:
+        """图标颜色跟随主题，深色下用更亮的一档。"""
+        self._theme = theme
+        self.update()
 
     def paintEvent(self, _event) -> None:  # noqa: N802
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
-        color = QColor("#94a3b8")
+        colors = THEMES.get(self._theme, THEMES["light"])
+        color = QColor(colors.get("text_muted", "#94a3b8"))
         p.setPen(QPen(color, 1.4))
         p.setBrush(Qt.NoBrush)
         p.drawEllipse(QRectF(1.5, 1.5, 13.0, 13.0))
@@ -314,12 +323,17 @@ class SectionCard(QFrame):
 
         header = QHBoxLayout()
         header.setSpacing(8)
+        self._theme = "light"
+        self._icon_kind = icon_kind
+        self._inline_icon = inline_icon
+        self._icon_label: QLabel | None = None
+        self._chip_icon_label: QLabel | None = None
         if step:
             header.addWidget(StepBadge(step))
         elif icon_kind:
             icon_lbl = QLabel()
             icon_lbl.setObjectName("sectionIcon")
-            icon_lbl.setPixmap(make_icon(icon_kind, "#2563eb", 16).pixmap(QSize(16, 16)))
+            self._icon_label = icon_lbl
             header.addWidget(icon_lbl, 0, Qt.AlignVCenter)
         title_label = QLabel(title)
         title_label.setObjectName("sectionTitle")
@@ -333,7 +347,7 @@ class SectionCard(QFrame):
             chip_layout.setSpacing(5)
             if inline_icon:
                 chip_icon = QLabel()
-                chip_icon.setPixmap(make_icon(inline_icon, "#64748b", 13).pixmap(QSize(13, 13)))
+                self._chip_icon_label = chip_icon
                 chip_layout.addWidget(chip_icon, 0, Qt.AlignVCenter)
             chip_label = QLabel(inline_hint)
             chip_label.setObjectName("softChipText")
@@ -357,6 +371,20 @@ class SectionCard(QFrame):
         self.body = QVBoxLayout()
         self.body.setSpacing(10)
         outer.addLayout(self.body)
+        self.set_theme(self._theme)
+
+    def set_theme(self, theme: str) -> None:
+        """标题图标与胶囊图标跟随主题，避免夜间主题下仍是浅色的一档。"""
+        self._theme = theme
+        colors = THEMES.get(theme, THEMES["light"])
+        if self._icon_label is not None and self._icon_kind:
+            self._icon_label.setPixmap(
+                make_icon(self._icon_kind, colors["accent"], 16).pixmap(QSize(16, 16))
+            )
+        if self._chip_icon_label is not None and self._inline_icon:
+            self._chip_icon_label.setPixmap(
+                make_icon(self._inline_icon, colors["text_muted"], 13).pixmap(QSize(13, 13))
+            )
 
 
 class StatusBanner(QFrame):
@@ -528,6 +556,11 @@ class StatusDot(QWidget):
         self._color = QColor(color)
         self.setFixedSize(7, 7)
 
+    def set_color(self, color: str) -> None:
+        """换色（切换主题时调用）。"""
+        self._color = QColor(color)
+        self.update()
+
     def paintEvent(self, _event) -> None:  # noqa: N802
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
@@ -551,7 +584,8 @@ class PillButton(QFrame):
         layout.setContentsMargins(10, 4, 10, 4)
         layout.setSpacing(5)
         if dot_color:
-            layout.addWidget(StatusDot(dot_color), 0, Qt.AlignVCenter)
+            self.dot = StatusDot(dot_color)
+            layout.addWidget(self.dot, 0, Qt.AlignVCenter)
         self.name = QLabel(label)
         self.name.setObjectName("pillName")
         self.count = QLabel("0")
@@ -573,6 +607,12 @@ class PillButton(QFrame):
     def set_count(self, count: int) -> None:
         self.count.setText(str(count))
 
+    def set_dot_color(self, color: str) -> None:
+        """圆点换色（切换主题时调用）。"""
+        dot = getattr(self, "dot", None)
+        if dot is not None:
+            dot.set_color(color)
+
 
 class SegmentedFilter(QFrame):
     """按级别筛选问题的胶囊分段，带实时计数。"""
@@ -586,13 +626,26 @@ class SegmentedFilter(QFrame):
         layout.setContentsMargins(3, 3, 3, 3)
         layout.setSpacing(2)
         self._pills: dict[str, PillButton] = {}
+        self._dot_tokens: dict[str, str | None] = {}
         for label, value, dot_color in FILTER_ITEMS:
             pill = PillButton(label, dot_color=dot_color)
             pill.clicked.connect(lambda value=value: self._select(value))
             layout.addWidget(pill)
             self._pills[value] = pill
+            self._dot_tokens[value] = dot_color
         self._pills["ALL"].set_checked(True)
         self._value = "ALL"
+        self._theme = "light"
+        self.set_theme("light")
+
+    def set_theme(self, theme: str) -> None:
+        """圆点颜色跟随主题，与问题表里的级别徽标保持同一套语义色。"""
+        self._theme = theme
+        colors = THEMES.get(theme, THEMES["light"])
+        for value, token in self._dot_tokens.items():
+            if not token:
+                continue
+            self._pills[value].set_dot_color(colors.get(token, colors["text_muted"]))
 
     def _select(self, value: str) -> None:
         self._value = value
