@@ -107,7 +107,8 @@ def build_server(service: GatewayMcpService | None = None) -> MCPServer[Any]:
         name="diagnose_generation_failure",
         description=(
             "使用原始 Excel/ARXML 稳定复现并区分 DBC 缺失、输入、基线、工具 BUG 或不确定；"
-            "只读诊断，不创建分支或修改文件。repository_path 必须包含完整源码。"
+            "只读诊断，不创建分支或修改文件。repository_path 必须包含完整源码；"
+            "四个路径参数都必须是带盘符的本地 Windows 绝对路径，禁止 UNC、设备和命名管道路径。"
         ),
         annotations=ToolAnnotations(
             read_only_hint=True, destructive_hint=False, idempotent_hint=False, open_world_hint=True,

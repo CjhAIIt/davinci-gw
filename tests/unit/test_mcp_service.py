@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+import sys
 import threading
 import time
 from pathlib import Path
@@ -191,11 +192,22 @@ def test_server_registers_exact_tools_and_safety_annotations() -> None:
     asyncio.run(list_only())
 
 
-def test_diagnosis_result_keeps_summary_without_adapter_failure() -> None:
+def test_diagnosis_result_keeps_summary_without_adapter_failure(tmp_path: Path) -> None:
+    """诊断工具先按本地路径策略校验四个路径参数，再交给协调器。"""
+    config = tmp_path / "routes.xlsx"
+    baseline = tmp_path / "baseline.arxml"
+    config.write_bytes(b"xlsx")
+    baseline.write_text("<AUTOSAR/>", encoding="utf-8")
+    repository = tmp_path / "repo"
+    (repository / ".git").mkdir(parents=True)
+    (repository / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+
     async def scenario() -> None:
         service = GatewayMcpService(repairs=_DiagnosisRepairs())  # type: ignore[arg-type]
         try:
-            result = await service.diagnose_generation_failure("a", "b", "c", "d")
+            result = await service.diagnose_generation_failure(
+                str(config), str(baseline), str(repository), sys.executable,
+            )
             assert result["status"] == "SUCCESS"
             assert result["summary"] == "已确认属于工具 BUG"
             assert result["classification"] == "TOOL_BUG"

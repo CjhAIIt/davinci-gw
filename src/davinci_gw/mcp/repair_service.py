@@ -9,7 +9,7 @@ import os
 import re
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from davinci_gw.application import GatewayFacade
@@ -30,6 +30,9 @@ from davinci_gw.mcp.repair_models import (
     RepairState,
 )
 from davinci_gw.mcp.version import MCP_VERSION, load_build_info
+
+if TYPE_CHECKING:  # pragma: no cover - 仅供类型检查
+    from davinci_gw.mcp.runtime import BoundedFacadeRuntime
 
 _CONVENTIONAL_COMMIT = re.compile(
     r"^(fix|feat|refactor|perf|test|build|ci|docs|chore)(\([a-z0-9_.-]+\))?!?: .+",
@@ -152,9 +155,13 @@ class RepairCoordinator:
         facade: GatewayFacade | None = None,
         agent: RepairAgent | None = None,
         session_root: Path | None = None,
+        runtime: "BoundedFacadeRuntime | None" = None,
     ) -> None:
         self.facade = facade or GatewayFacade()
         self.agent = agent or CodexRepairAgent()
+        #: 复用 MCP 服务的重任务闸门；诊断里的预览必须和生成流程互斥，
+        #: 否则公开承诺的「同时只跑一个重任务」会被诊断绕过。
+        self.runtime = runtime
         if session_root is not None:
             root = session_root
         else:
@@ -207,10 +214,17 @@ class RepairCoordinator:
         baseline = _absolute_file(baseline_path, ".arxml", "baseline_path")
         repository = _repository(repository_path)
         python = _python(python_path)
-        prepared = await asyncio.to_thread(
-            self.facade.preview,
-            UpdateRequestDto(str(config), str(baseline)),
-        )
+        request = UpdateRequestDto(str(config), str(baseline))
+        if self.runtime is not None:
+            # 诊断里的预览和生成流程共用同一个重任务名额，避免两份 ARXML
+            # 同时驻留内存；取消令牌一并下传，客户端取消时能真正中止解析。
+            prepared = await self.runtime.run(
+                lambda token: self.facade.preview(request, cancellation=token),
+            )
+        else:
+            prepared = await asyncio.to_thread(self.facade.preview, request)
+        if prepared.status is OperationStatus.CANCELLED:
+            raise RepairContractError("诊断已被取消，未进入代码修复流程。")
         issues = _issue_dicts(prepared)
         succeeded = prepared.status is OperationStatus.SUCCESS
         session_id = getattr(prepared, "session_id", None)

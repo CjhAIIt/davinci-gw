@@ -11,7 +11,13 @@ from uuid import UUID, uuid4
 from davinci_gw.application import GatewayFacade
 from davinci_gw.contracts import OperationStatus, ProgressEventDto, UpdateRequestDto
 from davinci_gw.mcp.mapping import dto_envelope, envelope, issue
-from davinci_gw.mcp.paths import PathPolicyError, validate_input_file, validate_new_output
+from davinci_gw.mcp.paths import (
+    PathPolicyError,
+    validate_input_file,
+    validate_local_python,
+    validate_local_repository,
+    validate_new_output,
+)
 from davinci_gw.mcp.runtime import BoundedFacadeRuntime
 from davinci_gw.mcp.repair_contract import (
     CANCEL_CONFIRMATION,
@@ -70,7 +76,7 @@ class GatewayMcpService:
                 if self._repairs is None:
                     from davinci_gw.mcp.repair_service import RepairCoordinator
 
-                    self._repairs = RepairCoordinator(facade=self.facade)
+                    self._repairs = RepairCoordinator(facade=self.facade, runtime=self.runtime)
         return self._repairs
 
     @staticmethod
@@ -265,8 +271,15 @@ class GatewayMcpService:
         """稳定复现并分类；诊断阶段不创建分支、不写工程文件。"""
         tool = "diagnose_generation_failure"
         try:
+            # 修复类工具的路径参数与生成类工具同口径：只认带盘符的本地路径。
+            # python_path 随后会被真正执行，repository_path 会被写入分支，
+            # 两者都不能落在 UNC、设备路径或网络共享上。
+            config = validate_input_file(config_path, "config_path", ".xlsx")
+            baseline = validate_input_file(baseline_path, "baseline_path", ".arxml")
+            repository = validate_local_repository(repository_path, "repository_path")
+            python = validate_local_python(python_path, "python_path")
             record = await self.repairs.diagnose(
-                config_path, baseline_path, repository_path, python_path,
+                config, baseline, repository, python,
             )
             payload = record.to_payload()
             payload.pop("summary", None)
@@ -274,6 +287,8 @@ class GatewayMcpService:
                 tool, status=OperationStatus.SUCCESS.value, operation_id=str(uuid4()),
                 summary=record.summary, **payload, issues=list(record.issues),
             )
+        except PathPolicyError as exc:
+            return self._path_failure(tool, exc)
         except RepairContractError as exc:
             return self._repair_contract_failure(tool, exc)
         except Exception as exc:
