@@ -133,10 +133,17 @@ def _restrict_descriptor_permissions(path: Path) -> None:
     续行误当成一个主体，``/remove:g`` 就会失败，fail-closed 之下
     Bridge 反而起不来。``/reset`` 不需要知道其它主体是谁。
 
-    顺序上必须先授权再去继承：``/inheritance:r`` 会把继承项从
-    访问控制表里摘掉，如果此时当前用户还没有显式授权，文件会短暂
-    变成"谁都没有权限"，紧接着的写入与客户端的读取都会撞上
-    ``PermissionError``。
+    顺序上有两点讲究：
+
+    - ``/reset`` 必须在 ``/inheritance:r`` 之前。``/reset`` 把访问
+      控制表重置为父目录的默认继承项，文件上原有的显式授权随之清掉；
+      紧接着 ``/inheritance:r`` 把继承项也摘掉，访问控制表就变成空的
+      （谁都没有权限），最后 ``/grant:r`` 只补当前用户一条完全控制。
+    - 这三步只作用在**临时文件**上（见 ``_write_descriptor``），
+      因此中间那段"谁都没有权限"的空窗不影响客户端：目标文件在整个
+      过程中原封不动，客户端读到的始终是权限完好的旧文件或新文件。
+      若把这三步直接用在正在被读取的目标文件上，空窗会让客户端撞上
+      ``PermissionError``——实测 20 轮里读失败一万五千余次。
 
     这里不用 PowerShell 的 ``Set-Acl``：``Set-Acl`` 属于
     ``Microsoft.PowerShell.Security`` 模块，在 PowerShell 7 环境里
