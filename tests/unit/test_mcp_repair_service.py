@@ -15,6 +15,7 @@ from davinci_gw.mcp.repair_models import (
     AgentRepairResult,
     DiagnosisRecord,
     FailureKind,
+    RepairRecord,
     RepairState,
 )
 from davinci_gw.mcp.repair_service import (
@@ -23,6 +24,7 @@ from davinci_gw.mcp.repair_service import (
     SUBMIT_CONFIRMATION,
     RepairContractError,
     RepairCoordinator,
+    _changed_and_forbidden_paths,
 )
 
 
@@ -269,6 +271,83 @@ def test_start_uses_isolated_worktree_and_cross_process_lock(
         assert record.lock_path is None
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("porcelain", [
+    " M input/notes.md\n",
+    " M Input/notes.md\n",
+    " M release/pkg.zip\n",
+    " M Release/pkg.zip\n",
+    " M config.xlsx\n",
+    " M 客户数据.arxml\n",
+    " M .env\n",
+    " M .env.production\n",
+    " M .envrc\n",
+    " M config.env\n",
+])
+def test_changed_paths_guard_blocks_inputs_artifacts_and_secrets(porcelain: str) -> None:
+    """改动文件关卡必须拦下客户输入、构建产物与凭据文件。
+
+    这是修复代理唯一的上线闸门。目录前缀要按 Windows 的实际语义比较：
+    ``Input/`` 与 ``input/`` 是同一个目录，区分大小写就能绕过；凭据文件
+    也不止 ``.env`` 这一个名字。
+    """
+    changed, forbidden = _changed_and_forbidden_paths(porcelain)
+    assert changed
+    assert forbidden, porcelain
+
+
+@pytest.mark.parametrize("porcelain", [
+    " M src/fix.py\n",
+    " M tests/unit/test_fix.py\n",
+    "?? 新增模块.py\n",
+    "R  old_name.py -> src/new_name.py\n",
+])
+def test_changed_paths_guard_allows_ordinary_source_changes(porcelain: str) -> None:
+    """正常的源码与测试改动必须照常放行，别把关卡收得过紧。"""
+    changed, forbidden = _changed_and_forbidden_paths(porcelain)
+    assert changed
+    assert not forbidden, forbidden
+
+
+def _awaiting_submission(tmp_path: Path) -> tuple[RepairCoordinator, RepairRecord]:
+    """构造一个等待提交的修复现场，跳过真实修复流程。"""
+    config, baseline, repository, python = _inputs(tmp_path)
+    diagnosis = DiagnosisRecord(
+        "diagnosis", repository, config, baseline, python,
+        FailureKind.TOOL_BUG, "已证实", ("复现",), ("src/example.py:1",), True, (), True, False,
+    )
+    coordinator = RepairCoordinator(
+        facade=_Facade(OperationStatus.VALIDATION_FAILED),  # type: ignore[arg-type]
+        agent=_Agent(AgentDiagnosis(FailureKind.TOOL_BUG, "不应调用")),
+        session_root=tmp_path / "sessions",
+    )
+    record = RepairRecord(
+        "repair-id", diagnosis, "a" * 40, "hotfix/mcp-auto-test",
+        tmp_path / "worktree", tmp_path / "session", None,
+    )
+    record.state = RepairState.AWAITING_SUBMISSION
+    coordinator.repairs[record.repair_id] = record
+    return coordinator, record
+
+
+def test_submit_refuses_changes_touching_customer_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """走公开的提交入口：改动碰了客户输入就必须被挡下，并留下明确原因。"""
+    coordinator, record = _awaiting_submission(tmp_path)
+
+    async def fake_run(*args: str, **kwargs: object) -> str:
+        if args[:3] == ("git", "status", "--porcelain"):
+            return " M Input/客户数据.txt\n"
+        return ""
+
+    monkeypatch.setattr("davinci_gw.mcp.repair_service._run", fake_run)
+    result = asyncio.run(coordinator.submit(
+        record.repair_id, SUBMIT_CONFIRMATION, "LOCAL_COMMIT", "fix(gui): 修好界面问题", "origin",
+    ))
+    assert result.state is RepairState.NEEDS_ATTENTION
+    assert "禁止提交" in (result.error or "")
 
 
 def test_cancel_requires_confirmation_and_preserves_session(tmp_path: Path) -> None:

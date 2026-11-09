@@ -38,6 +38,32 @@ _FORBIDDEN_SUFFIXES = {".xlsx", ".xls", ".arxml", ".dbc", ".ldf", ".blf", ".env"
 _INPUT_PREFIXES = (
     "WORKBOOK_", "INPUT_", "PATH_", "CAN_ID_", "OPERATION_", "TIMEOUT_", "SIGNAL_BIT_",
 )
+#: 禁止提交的顶层目录（仓库相对路径，小写）。Windows 的文件系统不区分大小写，
+#: ``Input/`` 与 ``input/`` 是同一个目录，所以比较时必须忽略大小写。
+_FORBIDDEN_DIRECTORIES = ("input/", "release/")
+
+
+def _changed_and_forbidden_paths(porcelain: str) -> tuple[list[str], list[str]]:
+    """从 ``git status --porcelain`` 的输出里分出改动清单与禁止提交的改动。
+
+    这是修复代理唯一的上线闸门：客户输入、构建产物和凭据文件一旦混进
+    提交，就会被推到 fork 或直接发布到维护者仓库。判定必须按 Windows 的
+    实际语义来——文件系统不区分大小写，凭据文件也不止 ``.env`` 一个名字。
+    """
+    changed: list[str] = []
+    for line in porcelain.splitlines():
+        if len(line) >= 4:
+            changed.append(line[3:].split(" -> ")[-1].strip('"'))
+    forbidden: list[str] = []
+    for name in changed:
+        lowered = name.replace("\\", "/").casefold()
+        if (
+            Path(name).suffix.casefold() in _FORBIDDEN_SUFFIXES
+            or Path(name).name.casefold().startswith(".env")
+            or lowered.startswith(_FORBIDDEN_DIRECTORIES)
+        ):
+            forbidden.append(name)
+    return changed, forbidden
 
 
 async def _run(
@@ -367,17 +393,9 @@ class RepairCoordinator:
 
     async def _validate_changed_paths(self, record: RepairRecord) -> None:
         names = await _run("git", "status", "--porcelain", cwd=record.worktree_path)
-        changed: list[str] = []
-        for line in names.splitlines():
-            if len(line) >= 4:
-                changed.append(line[3:].split(" -> ")[-1].strip('"'))
+        changed, forbidden = _changed_and_forbidden_paths(names)
         if not changed:
             raise RepairContractError("修复代理没有产生代码或测试改动。")
-        forbidden = [name for name in changed if (
-            Path(name).suffix.casefold() in _FORBIDDEN_SUFFIXES
-            or Path(name).name.casefold() == ".env"
-            or name.replace("\\", "/").startswith(("input/", "release/"))
-        )]
         if forbidden:
             raise RepairContractError(f"修复包含禁止提交的输入或产物：{', '.join(forbidden)}")
 
