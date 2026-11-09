@@ -55,5 +55,27 @@ def com_source_name(source_signal: str, source_network: str) -> str:
 
 
 def com_destination_name(target_signal: str, target_network: str) -> str:
-    """返回 ComGwDestination 名称。"""
+    """返回 ComGwDestination 名称。
+
+    名称只编码目标网段：同一目标网段里的不同目标信号要靠
+    ``unique_destination_name`` 追加序号区分，否则同一父容器下会出现
+    两个同名对象。
+    """
     return f"ComGwDestination_to_{safe_name(target_network)}"
+
+
+def unique_destination_name(base: str, used: set[str]) -> str:
+    """在一条 Mapping 内给出不重名的 Destination 名。
+
+    同名时按 ``_001``、``_002`` 追加序号——真实工程里的 ComGwDestination
+    也用这种带序号的写法区分同一条 Mapping 下的多个目标。
+    """
+    if base not in used:
+        used.add(base)
+        return base
+    index = 1
+    while f"{base}_{index:03d}" in used:
+        index += 1
+    name = f"{base}_{index:03d}"
+    used.add(name)
+    return name
