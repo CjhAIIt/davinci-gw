@@ -73,6 +73,7 @@ class SourceResolution:
     chain: DirectSourceChain | None = None
     candidates: tuple[str, ...] = ()
     detail: str = ""
+    skipped_endpoints: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +189,7 @@ class DirectRouteSemanticLocator:
         key = route.key
         related: list[str] = []
         conflicts: list[str] = []
+        skipped_by_name: list[str] = []
         configured_type_notes: dict[str, str] = {}
         chains: dict[tuple[str, str, str, str], DirectSourceChain] = {}
         expected_parameters = {
@@ -209,6 +211,13 @@ class DirectRouteSemanticLocator:
             if not same_hrh or not same_id:
                 continue
             canif_path = autosar_path(canif, self.namespace)
+            if not same_name:
+                # HRH 与 CAN ID 只是端点身份的一部分。同一总线上不同报文名可以共享
+                # 这两项（真实基线里诊断透传报文即在同一 HRH 与 CAN ID 上并存经典与
+                # FD 两个接收端点）；名称不匹配的端点不是当前路由候选，不能把合法
+                # 新增误报为源端点占用。与目标端定位器保持同一口径。
+                skipped_by_name.append(canif_path)
+                continue
             related.append(canif_path)
             actual_types = parameters.get(defs.CANIF_RX_CAN_ID_TYPE, ())
             candidate_expected = dict(expected_parameters)
@@ -225,7 +234,7 @@ class DirectRouteSemanticLocator:
                 )
             matched, differences = _required_values_match(parameters, candidate_expected)
             pdu_refs = references.get(defs.CANIF_RX_PDU_REF, ())
-            if not same_id or not same_name or not matched or len(pdu_refs) != 1:
+            if not matched or len(pdu_refs) != 1:
                 conflicts.append(
                     f"{canif_path}：名称匹配={same_name}，CAN ID 匹配={same_id}，"
                     f"PDU 引用数={len(pdu_refs)}，参数冲突={list(differences)}"
@@ -285,19 +294,22 @@ class DirectRouteSemanticLocator:
                 DirectSemanticState.PARTIAL_CONFLICT,
                 candidates=tuple(sorted(set(related))), detail="；".join(conflicts),
             )
+        skipped = tuple(sorted(set(skipped_by_name)))
         if not chains:
-            return SourceResolution(DirectSemanticState.MISSING)
+            return SourceResolution(DirectSemanticState.MISSING, skipped_endpoints=skipped)
         if len(chains) != 1:
             return SourceResolution(
                 DirectSemanticState.AMBIGUOUS,
                 candidates=tuple(sorted(chain.routing_path for chain in chains.values())),
                 detail="同一源报文定位到多条完整 PduR 源链",
+                skipped_endpoints=skipped,
             )
         chain = next(iter(chains.values()))
         return SourceResolution(
             DirectSemanticState.FOUND,
             chain,
             detail=configured_type_notes.get(chain.canif_path, ""),
+            skipped_endpoints=skipped,
         )
 
     def _ordinary_application_destinations(self, ecuc_path: str) -> tuple[str, ...]:
