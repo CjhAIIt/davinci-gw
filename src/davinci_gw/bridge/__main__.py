@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import shlex
+import socket
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -340,6 +341,63 @@ def _replace_with_retry(temporary: Path, path: Path, attempts: int = 20) -> None
     ) from last_error
 
 
+def _startup_failure_message(error: BaseException | None) -> str:
+    """把服务启动阶段的异常翻译成一句能看懂的说明。
+
+    Uvicorn 绑定端口失败时会抛 ``SystemExit(3)``——它不携带任何
+    可读信息，真正的原因（端口被占用之类）藏在它内部的
+    ``__cause__`` 里。直接打印 SystemExit 只会得到一个没有意义的
+    「3」，因此这里往下一层取真正的原因。
+    """
+    if error is None:
+        return "服务未能启动。"
+    cause = error.__cause__ or error.__context__
+    if isinstance(error, SystemExit) and cause is not None:
+        return f"{type(cause).__name__}: {cause}"
+    if isinstance(error, SystemExit):
+        return f"服务未能启动（退出码 {error.code}）。"
+    return f"{type(error).__name__}: {error}"
+
+
+def _probe_port_available(host: str, port: int) -> bool:
+    """探测端口能否绑定。
+
+    端口被占用是常见的启动失败。若不预先探测，Uvicorn 会在绑定失败
+    时抛 ``SystemExit(3)``——那是 ``BaseException`` 的子类，asyncio
+    会把它当进程级信号直接终止事件循环，进程随即带着一段 traceback
+    退出，用户看到的是 Python 栈而不是「端口被占用」。
+
+    探测只是提前给出提示，真正的绑定仍由 Uvicorn 完成（探测与绑定
+    之间存在极小的竞态窗口，绑定真失败时仍会走 SystemExit 路径，
+    那种情况极罕见）。
+
+    监听地址可能是 IPv6 字面量（配置里写成 ``[::1]``，带方括号），
+    此时必须用 ``AF_INET6`` 探测，否则会因为地址族不匹配而误判成
+    「端口被占用」。地址族判断不出来时一律按可用处理：宁可漏掉
+    一次提示，也不要把正常启动拦下来。
+    """
+    if port == 0:
+        # 0 表示由系统分配端口，此时无从探测。
+        return True
+    candidate = host.strip().strip("[]")
+    family = socket.AF_INET
+    if ":" in candidate:
+        try:
+            socket.inet_pton(socket.AF_INET6, candidate)
+        except OSError:
+            # 认不出地址族：可能是主机名，交由 Uvicorn 去解析，
+            # 这里不拦。
+            return True
+        family = socket.AF_INET6
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind((candidate, port))
+    except OSError:
+        return False
+    return True
+
+
 async def _shutdown(uvicorn_server: Any, task: asyncio.Task[None]) -> None:
     """让已监听的 Uvicorn 服务收尾，释放端口。
 
@@ -373,6 +431,17 @@ async def _serve(config: BridgeConfig, log_level: str) -> int:
         return bound_port.get("port")
 
     app = build_bridge_app(core, config=config, port_provider=current_port)
+    # 端口被占用是最常见的启动失败。先探测一次：绑不上就干净退出，
+    # 不让 Uvicorn 去撞那个会终止事件循环的 SystemExit。
+    if not _probe_port_available(config.host, config.port):
+        print(
+            f"桥接配置错误：无法在 {config.host}:{config.port} 上启动服务："
+            f"端口已被占用（每个套接字地址只允许使用一次）。",
+            file=sys.stderr,
+            flush=True,
+        )
+        await core.aclose()
+        return 2
     uvicorn_config = uvicorn.Config(
         app, host=config.host, port=config.port, log_level=log_level.lower(), access_log=False,
         ssl_certfile=config.tls_certfile, ssl_keyfile=config.tls_keyfile,
@@ -382,8 +451,22 @@ async def _serve(config: BridgeConfig, log_level: str) -> int:
     try:
         while not uvicorn_server.started:
             if task.done():
-                task.result()
-                return
+                # 服务启动阶段就失败了（端口被占用、地址不可绑定等）。
+                # 这里不能用 task.result()：那个调用会把异常原样重抛，
+                # 进程就带着一段 traceback 崩掉，而不是给出一句能看懂的
+                # 中文说明。启动失败属于配置错误，按退出码 2 干净退出。
+                #
+                # Uvicorn 绑定端口失败时抛的是 SystemExit——它是
+                # BaseException 的子类，不是 Exception。必须单独接住，
+                # 否则它会一路穿过 except Exception，traceback 照旧出现。
+                error = task.exception()
+                message = _startup_failure_message(error)
+                print(
+                    f"桥接配置错误：无法在 {config.host}:{config.port} 上启动服务：{message}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return 2
             await asyncio.sleep(0.05)
         port = _bound_port(uvicorn_server, config.port)
         bound_port["port"] = port
@@ -433,7 +516,18 @@ async def _serve(config: BridgeConfig, log_level: str) -> int:
                 "请用 --public-host 指定客户端可达的主机名或 IP。",
                 flush=True,
             )
-        await task
+        try:
+            await task
+        except Exception as exc:  # noqa: BLE001 - 运行期故障转成可读说明
+            # 服务在运行期间崩溃：同样不该以裸 traceback 结束。
+            # 这不是配置错误（配置已经被接受过了），用退出码 1 表示
+            # 运行期失败。
+            print(
+                f"桥接服务异常退出：{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return 1
         return 0
     finally:
         await core.aclose()
