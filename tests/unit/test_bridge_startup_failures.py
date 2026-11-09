@@ -88,6 +88,33 @@ def test_port_probe_does_not_mistake_ipv6_for_an_occupied_port() -> None:
         holder.close()
 
 
+def test_wildcard_bind_still_starts_when_a_specific_address_holds_the_port() -> None:
+    """通配绑定时，端口被具体地址占用也必须能正常起来。
+
+    Windows 允许通配地址与具体地址共存：``127.0.0.1:port`` 被占用
+    时，绑 ``0.0.0.0:port`` 照样成功。端口预探测在通配模式下因此
+    查不出「冲突」——但这不是缺陷：那个端口本来就可用，Uvicorn 能
+    绑上。
+
+    这条用例把该结论固定下来：将来若有人把预探测改成「查不出冲突
+    就报错」，这里会失败。
+    """
+    from davinci_gw.bridge.__main__ import _probe_port_available
+
+    holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    holder.bind(("127.0.0.1", 0))
+    holder.listen(1)
+    port = holder.getsockname()[1]
+    try:
+        # 预探测在通配模式下查不出冲突（这是 Windows 的语义，不是 bug）。
+        assert _probe_port_available("0.0.0.0", port) is True
+        # 而真正绑定通配地址是允许的。
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as wildcard:
+            wildcard.bind(("0.0.0.0", port))
+    finally:
+        holder.close()
+
+
 def test_bridge_exits_cleanly_when_the_descriptor_cannot_be_written(tmp_path: Path) -> None:
     """发现文件写不出去时 Bridge 要干净退出，不能抛 traceback。
 
