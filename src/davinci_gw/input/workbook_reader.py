@@ -113,9 +113,12 @@ def _header_map(
     cells = next(sheet.iter_rows(min_row=1, max_row=1), ())
     values = tuple(_cell_value(cell) for cell in cells)
     found: dict[str, int] = {}
+    duplicated: dict[str, list[int]] = {}
     for index, value in enumerate(values):
         cleaned = _clean_string(value)
         if isinstance(cleaned, str) and cleaned:
+            if cleaned in found:
+                duplicated.setdefault(cleaned, [found[cleaned]]).append(index)
             found[cleaned] = index
     missing = [header for header in expected if header not in found]
     for header in missing:
@@ -123,7 +126,19 @@ def _header_map(
             path, sheet.title, 1, header, None,
             "缺少必需表头，请补充该列后重试。", "WORKBOOK_HEADER_MISSING",
         ))
-    return None if missing else found
+    # 同一表头出现多列时，列映射只能落到其中一列，另一列会被静默忽略并按
+    # 错误列取值生成路由。必需表头重复必须阻断，不能替用户挑一列。
+    duplicate_headers = {
+        header: indexes for header, indexes in duplicated.items() if header in expected
+    }
+    for header, indexes in duplicate_headers.items():
+        columns = "、".join(f"第{index + 1}列" for index in sorted(indexes))
+        issues.append(_issue(
+            path, sheet.title, 1, header, None,
+            f"在同一行出现多次（{columns}）；同一表头只能有一列，"
+            "请删除或改名重复的列后重试。", "WORKBOOK_HEADER_DUPLICATE",
+        ))
+    return None if missing or duplicate_headers else found
 
 
 def _cell_value(cell: Any) -> object:
