@@ -131,6 +131,7 @@ Prepared Session 默认 15 分钟过期、进程内最多 8 个。成功生成�
 - 配置表必须存在且为 `.xlsx`；基准必须存在且为 `.arxml`。
 - 输出父目录必须已存在；服务不会自动创建目录。
 - 输出必须是新 `.arxml`，不允许覆盖；也不允许大小写、规范化、符号链接或目录联接绕过基准保护。
+- 修复类工具同样按这套口径校验：`diagnose_generation_failure` 的 `config_path`、`baseline_path`、`repository_path`、`python_path` 都必须是带盘符的本地路径；`repository_path` 还必须指向带 `.git` 与 `pyproject.toml` 的源码目录，`python_path` 必须是本地 `python.exe` / `python`。
 - 响应最多返回 200 个问题，错误优先；总 JSON 响应上限为 512000 字节。
 
 ## 日志与故障排查

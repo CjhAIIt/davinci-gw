@@ -76,7 +76,11 @@ class GatewayMcpService:
                 if self._repairs is None:
                     from davinci_gw.mcp.repair_service import RepairCoordinator
 
-                    self._repairs = RepairCoordinator(facade=self.facade, runtime=self.runtime)
+                    # 协调器用自己的 facade：诊断的预览会建立一条 Prepared
+                    # Session，若与用户共用同一个存储，一次诊断就会把用户
+                    # 最早的一条会话挤出容量上限，那条 preparation_id 随即
+                    # 失效。诊断会话用完即弃，不该占用用户的额度。
+                    self._repairs = RepairCoordinator(runtime=self.runtime)
         return self._repairs
 
     @staticmethod

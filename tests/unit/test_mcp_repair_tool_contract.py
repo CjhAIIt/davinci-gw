@@ -147,6 +147,41 @@ def test_repair_tool_accepts_local_paths(tmp_path: Path) -> None:
     )
 
 
+def test_diagnosis_does_not_evict_user_prepared_sessions(
+    workbook_factory: object, arxml_factory: object, tmp_path: Path,
+) -> None:
+    """诊断不得占用用户的 Prepared Session 容量，把用户最早的一条挤掉。
+
+    诊断内部也要做一次真实预览，会建立一条 Prepared Session。若它与用户
+    共用同一个存储，用户攒满容量后的一次诊断就会挤掉最早的那条，
+    那条 preparation_id 随即变成「已被容量淘汰」。
+    """
+    config = workbook_factory()  # type: ignore[operator]
+    baseline = arxml_factory()  # type: ignore[operator]
+    capacity = 8
+
+    async def scenario() -> None:
+        service = GatewayMcpService()
+        try:
+            preparation_ids = []
+            for _ in range(capacity):
+                result = await service.preview_gateway_update(str(config), str(baseline))
+                assert result["status"] == "SUCCESS"
+                preparation_ids.append(result["preparation_id"])
+            diagnosis = await service.diagnose_generation_failure(
+                str(config), str(baseline), str(REPOSITORY), sys.executable,
+            )
+            assert diagnosis["status"] == "SUCCESS"
+            output = tmp_path / "still_alive.arxml"
+            generated = await service.generate_gateway_arxml(preparation_ids[0], str(output))
+            assert generated["status"] == "SUCCESS", generated
+            assert output.is_file()
+        finally:
+            await service.close()
+
+    asyncio.run(scenario())
+
+
 def test_diagnosis_shares_the_single_heavy_operation_slot(tmp_path: Path) -> None:
     """诊断的预览必须与生成预览互斥，不能并行占住两份 ARXML。"""
     local = _local_inputs(tmp_path)
