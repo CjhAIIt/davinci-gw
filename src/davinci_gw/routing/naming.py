@@ -19,18 +19,13 @@ def channel_token(channel: str) -> str:
     return cleaned[:-3].rstrip("_") if cleaned.upper().endswith("CAN") and len(cleaned) > 3 else cleaned
 
 
-def direct_source_name(message: str, channel: str) -> str:
-    """返回 EcuC/CanIf 接收对象名称。"""
-    return f"GWT_{safe_name(message)}_{channel_token(channel)}_Rx"
-
-
-def direct_target_name(message: str, channel: str) -> str:
-    """返回 EcuC/CanIf 发送对象名称。"""
-    return f"GWT_{safe_name(message)}_{channel_token(channel)}_Tx"
-
-
 def direct_endpoint_name(module: str, message: str, can_id: int, channel: str, direction: str) -> str:
-    """只用于新建 CanIf/EcuC 对象，完整保留通道和 CAN ID。"""
+    """只用于新建 CanIf/EcuC 对象，完整保留通道和 CAN ID。
+
+    命名必须编码**完整身份**：同一报文名在同一通道上可以对应多个 CAN ID，
+    名字里少了 CAN ID 就会让两条合法路由撞成同名对象。历史上
+    ``ComGwDestination`` 就因为只编码目标网段而出现过这种重名。
+    """
     return f"GWT_{module}_{safe_name(message)}_{can_id:X}_{safe_name(channel)}_{direction}"
 
 
